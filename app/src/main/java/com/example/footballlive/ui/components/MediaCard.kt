@@ -29,6 +29,7 @@ fun MediaCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Карточка матча для Android TV с фокусом и анимацией
     Card(
         onClick = onClick,
         modifier = modifier,
@@ -38,7 +39,7 @@ fun MediaCard(
             focusedContainerColor = MaterialTheme.colorScheme.primaryContainer
         ),
         scale = CardDefaults.scale(
-            focusedScale = 1.1f
+            focusedScale = 1.1f // Увеличение при фокусе
         ),
         border = CardDefaults.border(
             focusedBorder = androidx.tv.material3.Border(
@@ -52,7 +53,7 @@ fun MediaCard(
         Column(
             modifier = Modifier.fillMaxWidth()
         ) {
-            // Upper zone: logos and ⚔️
+            // Верхняя зона: логотипы команд и символ ⚔️
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -61,6 +62,7 @@ fun MediaCard(
                 contentAlignment = Alignment.Center
             ) {
                 if (mediaItem.homeTeamImage.isNotEmpty() && mediaItem.awayTeamImage.isNotEmpty()) {
+                    // Отображение логотипов команд если они есть
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -87,6 +89,7 @@ fun MediaCard(
                         )
                     }
                 } else {
+                    // Только символ ⚔️ если логотипов нет
                     Text(
                         text = "⚔️",
                         style = MaterialTheme.typography.headlineSmall,
@@ -95,7 +98,7 @@ fun MediaCard(
                 }
             }
             
-            // Lower zone: time
+            // Нижняя зона: время матча
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -112,6 +115,7 @@ fun MediaCard(
                 }
             }
             
+            // Название матча
             Text(
                 text = mediaItem.title,
                 modifier = Modifier

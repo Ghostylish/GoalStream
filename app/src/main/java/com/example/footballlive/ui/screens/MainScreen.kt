@@ -51,6 +51,7 @@ import com.example.footballlive.data.MediaItem
 import com.example.footballlive.data.MockData
 import com.example.footballlive.data.AcestreamStream
 import com.example.footballlive.ui.components.MediaCard
+import androidx.compose.foundation.layout.PaddingValues
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -60,32 +61,44 @@ fun MainScreen(
     modifier: Modifier = Modifier,
     onMediaItemClick: (MediaItem) -> Unit = {}
 ) {
+    // Контекст приложения для работы с интентами
     val context = LocalContext.current
+    // Список матчей для отображения
     var mediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    // Флаг загрузки данных
     var isLoading by remember { mutableStateOf(true) }
+    // Выбранный матч для показа диалога
     var selectedMediaItem by remember { mutableStateOf<MediaItem?>(null) }
+    // Флаг парсинга acestream ссылок
     var isParsingAcestream by remember { mutableStateOf(false) }
+    // Список acestream трансляций
     var acestreamStreams by remember { mutableStateOf<List<AcestreamStream>>(emptyList()) }
+    // Флаг показа диалога установки Ace Stream
     var showInstallDialog by remember { mutableStateOf(false) }
+    // Выбранная ссылка для трансляции
     var selectedStreamLink by remember { mutableStateOf("") }
     
+    // Загрузка данных при запуске экрана
     LaunchedEffect(Unit) {
         isLoading = true
         val parser = MatchParser()
         val result = parser.parseMatches()
         result.onSuccess { items ->
-            // Load team images for each match
+            // Загрузка изображений команд для каждого матча
             val itemsWithImages = parser.loadTeamImages(items)
             mediaItems = itemsWithImages
         }.onFailure {
-            // Fallback to mock data if parsing fails
+            // Резервные данные если парсинг не удался
             mediaItems = MockData.mediaItems
         }
         isLoading = false
     }
     
-    Box(modifier = modifier.fillMaxSize()) {
-        // Background image
+    // Основной контейнер с фоном и контентом
+    Box(
+        modifier = modifier.fillMaxSize()
+    ) {
+        // Фоновое изображение
         androidx.compose.foundation.Image(
             painter = painterResource(id = R.drawable.background_main),
             contentDescription = "Background",
@@ -93,10 +106,12 @@ fun MainScreen(
             contentScale = androidx.compose.ui.layout.ContentScale.Crop
         )
         
+        // Контейнер с контентом поверх фона
         Box(
             modifier = Modifier.fillMaxSize()
         ) {
             if (isLoading) {
+                // Индикатор загрузки
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -106,11 +121,16 @@ fun MainScreen(
                     )
                 }
             } else {
+                // Сетка карточек матчей для Android TV
                 TvLazyVerticalGrid(
                     columns = TvGridCells.Fixed(4),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 32.dp,
+                        end = 32.dp,
+                        top = 48.dp, // Даем чуть больше места сверху для scale анимации
+                        bottom = 32.dp
+                    ),
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(24.dp),
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(24.dp)
                 ) {
@@ -118,6 +138,7 @@ fun MainScreen(
                         MediaCard(
                             mediaItem = mediaItem,
                             onClick = { 
+                                // При клике на карточку запускаем парсинг acestream ссылок
                                 selectedMediaItem = mediaItem
                                 isParsingAcestream = true
                                 onMediaItemClick(mediaItem)
@@ -129,7 +150,7 @@ fun MainScreen(
         }
     }
     
-    // Parse acestream links when a media item is selected
+    // Парсинг acestream ссылок при выборе матча
     LaunchedEffect(selectedMediaItem) {
         if (selectedMediaItem != null && isParsingAcestream) {
             val parser = MatchParser()
@@ -139,7 +160,7 @@ fun MainScreen(
         }
     }
     
-    // Show dialog when acestream parsing is complete
+    // Показ диалога с acestream трансляциями после парсинга
     selectedMediaItem?.let { item ->
         if (!isParsingAcestream) {
             AcestreamDialog(
@@ -148,9 +169,11 @@ fun MainScreen(
                 onStreamClick = { stream ->
                     selectedStreamLink = stream.link
                     try {
+                        // Пытаемся открыть acestream ссылку
                         openAcestreamLink(context, stream.link)
                     } catch (e: Exception) {
                         android.util.Log.d("AceStreamCheck", "Failed to open acestream link: ${e.message}")
+                        // Если не удалось - показываем диалог установки
                         showInstallDialog = true
                     }
                 },
@@ -162,11 +185,12 @@ fun MainScreen(
         }
     }
     
-    // Show install dialog if Ace Stream is not installed
+    // Показ диалога установки Ace Stream если приложение не установлено
     if (showInstallDialog) {
         InstallAceStreamDialog(
             onDismiss = { showInstallDialog = false },
             onInstall = {
+                // Открытие Play Store для установки Ace Stream
                 openPlayStore(context)
                 showInstallDialog = false
             }
@@ -182,6 +206,7 @@ fun AcestreamDialog(
     onStreamClick: (AcestreamStream) -> Unit,
     onDismiss: () -> Unit
 ) {
+    // Диалоговое окно с acestream трансляциями
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -202,6 +227,7 @@ fun AcestreamDialog(
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Заголовок с названием матча
                 Text(
                     text = mediaItem.title,
                     style = MaterialTheme.typography.headlineMedium,
@@ -219,12 +245,14 @@ fun AcestreamDialog(
                     
                     Spacer(modifier = Modifier.height(8.dp))
                     
+                    // Список трансляций для Android TV
                     TvLazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(300.dp)
                     ) {
                         lazyItems(acestreamStreams) { stream ->
+                            // Карточка трансляции
                             Card(
                                 onClick = {
                                     onStreamClick(stream)
@@ -262,6 +290,7 @@ fun AcestreamDialog(
                         }
                     }
                 } else {
+                    // Сообщение если трансляций нет
                     Text(
                         text = "Трансляций еще нет",
                         style = MaterialTheme.typography.bodyLarge,
@@ -271,6 +300,7 @@ fun AcestreamDialog(
                 
                 Spacer(modifier = Modifier.height(24.dp))
                 
+                // Кнопка закрытия диалога
                 OutlinedButton(
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth()
@@ -287,6 +317,7 @@ fun InstallAceStreamDialog(
     onDismiss: () -> Unit,
     onInstall: () -> Unit
 ) {
+    // Диалоговое окно для установки Ace Stream
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -323,6 +354,7 @@ fun InstallAceStreamDialog(
                 
                 Spacer(modifier = Modifier.height(24.dp))
                 
+                // Кнопки выбора
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -346,8 +378,9 @@ fun InstallAceStreamDialog(
     }
 }
 
+// Проверка установлен ли Ace Stream
 fun isAceStreamInstalled(context: android.content.Context): Boolean {
-    // Check if there's an app that can handle acestream:// intents
+    // Проверка есть ли приложение которое может обрабатывать acestream:// интенты
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("acestream://test"))
     val resolveInfo = context.packageManager.resolveActivity(intent, 0)
     
@@ -360,11 +393,13 @@ fun isAceStreamInstalled(context: android.content.Context): Boolean {
     return false
 }
 
+// Открытие acestream ссылки через интент
 fun openAcestreamLink(context: android.content.Context, link: String) {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link))
     context.startActivity(intent)
 }
 
+// Открытие Play Store для установки Ace Stream
 fun openPlayStore(context: android.content.Context) {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=org.acestream.node"))
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

@@ -34,9 +34,25 @@ class MatchParser {
                 val title = titleElement?.text() ?: "Unknown Match"
                 val link = titleElement?.attr("href") ?: ""
                 
-                // Parse time from evdesc span
+                // Parse full match schedule info. Some pages keep the tournament
+                // outside span.evdesc, so fallback to the whole row text.
                 val evdesc = element.select("span.evdesc").first()
-                val time = evdesc?.text()?.split("\n")?.firstOrNull()?.trim() ?: ""
+                val evdescText = evdesc?.text()
+                    ?.replace(Regex("\\s+"), " ")
+                    ?.trim()
+                    ?: ""
+                val rowText = element.text()
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                val rowInfo = rowText
+                    .removePrefix(title)
+                    .trim()
+                    .removePrefix("-")
+                    .trim()
+                val time = when {
+                    rowInfo.contains(Regex("\\d{1,2}:\\d{2}")) && rowInfo.length > evdescText.length -> rowInfo
+                    else -> evdescText
+                }
                 
                 // Convert relative match link to absolute
                 val matchUrl = if (link.startsWith("/")) {

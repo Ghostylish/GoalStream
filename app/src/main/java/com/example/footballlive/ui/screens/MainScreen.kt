@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -131,6 +132,7 @@ fun MainScreen(
         if (isLoadingMatches) {
             LoadingState()
         } else {
+            // Главный контейнер экрана: здесь настраиваются общие отступы от краёв ТВ-экрана.
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -149,6 +151,7 @@ fun MainScreen(
                     modifier = Modifier.fillMaxSize(),
                     horizontalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
+                    // Левая панель со списком матчей. Width влияет на ширину списка и карточек матчей.
                     MatchListPanel(
                         mediaItems = mediaItems,
                         selectedMediaItem = selectedMediaItem,
@@ -164,6 +167,7 @@ fun MainScreen(
                         }
                     )
 
+                    // Правая панель: выбранный матч, логотипы команд и блок трансляций.
                     MatchDetailPanel(
                         mediaItem = selectedMediaItem,
                         streams = acestreamStreams,
@@ -218,18 +222,14 @@ private fun Header(
                 modifier = Modifier
                     .size(46.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFF32D583), Color(0xFF7CD4FD))
-                        )
-                    ),
+                    .background(Color.White.copy(alpha = 0.08f)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "GS",
-                    color = Color(0xFF03120C),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Black
+                Image(
+                    painter = painterResource(id = R.mipmap.ic_launcher),
+                    contentDescription = "Goal Stream",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
                 )
             }
 
@@ -237,12 +237,12 @@ private fun Header(
 
             Column {
                 Text(
-                    text = "GoalStream",
+                    text = "Goal Stream",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Матчи сегодня • $matchCount событий",
+                    text = "Все матчи • $matchCount событий",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -290,6 +290,7 @@ private fun MatchListPanel(
     onMatchClick: (MediaItem) -> Unit
 ) {
     Panel(modifier = modifier) {
+        // Список матчей слева. contentPadding даёт место для focus-scale первой/последней карточки.
         TvLazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
@@ -400,6 +401,7 @@ private fun MatchDetailPanel(
         }
 
         Column(modifier = Modifier.fillMaxSize()) {
+            // Верхняя часть правой панели. weight(1f) отдаёт ей всё место над блоком трансляций.
             MatchHero(
                 mediaItem = mediaItem,
                 streamCount = streams.size,
@@ -408,6 +410,7 @@ private fun MatchDetailPanel(
                     .weight(1f)
             )
 
+            // Нижний блок правой панели с потоками. Height влияет на количество видимых рядов трансляций.
             StreamsSection(
                 mediaItem = mediaItem,
                 streams = streams,
@@ -415,7 +418,7 @@ private fun MatchDetailPanel(
                 hasSearchedStreams = hasSearchedStreams,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(276.dp),
+                    .height(279.dp),
                 onSearchStreams = onSearchStreams,
                 onStreamClick = onStreamClick
             )
@@ -429,6 +432,7 @@ private fun MatchHero(
     streamCount: Int,
     modifier: Modifier = Modifier
 ) {
+    // Hero выбранного матча: слева название/meta, справа логотипы и полная дата/турнир.
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -471,8 +475,10 @@ private fun TeamSummaryBlock(
     mediaItem: MediaItem,
     modifier: Modifier = Modifier
 ) {
+    // Правый визуальный блок hero: логотипы команд сверху, полная информация о матче снизу.
     Column(
-        modifier = modifier,
+        // Отступ сверху для блока логотипов справа. Увеличивай/уменьшай top, если лого слишком высоко/низко.
+        modifier = modifier.padding(top = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         TeamVisual(
@@ -487,6 +493,7 @@ private fun TeamSummaryBlock(
 
 @Composable
 private fun MatchFullInfo(text: String) {
+    // Плашка полной даты/турнира под логотипами. Padding и maxLines можно менять под длинные строки.
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -514,6 +521,7 @@ private fun TeamVisual(
     awayTeamImage: String,
     modifier: Modifier = Modifier
 ) {
+    // Строка логотипов команд. Размер VS и расстояния между лого регулируются здесь.
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -585,31 +593,28 @@ private fun StreamsSection(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.18f))
-            .padding(24.dp)
+            .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 0.dp)
     ) {
+        // Заголовок блока трансляций: слева title, справа полная дата/турнир выбранного матча.
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Трансляции",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
                 text = fullMatchInfo(mediaItem),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold
             )
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         when {
             isParsingStreams -> StreamsLoading()
             streams.isNotEmpty() -> {
+                // Сетка карточек трансляций. contentPadding и spacedBy нужны, чтобы focus-scale не обрезался.
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
@@ -620,7 +625,7 @@ private fun StreamsSection(
                         bottom = 18.dp
                     ),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(22.dp)
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
                     items(streams, key = { it.id }) { stream ->
                         StreamCard(
@@ -644,6 +649,7 @@ private fun StreamCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    // Карточка одного потока. focusedScale, padding и тексты внутри влияют на обрезание при фокусе.
     Card(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
@@ -682,7 +688,7 @@ private fun StreamCard(
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "▶ Смотреть",
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Black
             )
         }
@@ -857,7 +863,7 @@ fun InstallAceStreamDialog(
                     color = MaterialTheme.colorScheme.onSurface
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
                     text = "Хотите установить Ace Stream?",

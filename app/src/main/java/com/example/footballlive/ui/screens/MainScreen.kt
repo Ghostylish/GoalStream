@@ -5,9 +5,13 @@ package com.example.footballlive.ui.screens
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,8 +51,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.items
 import androidx.tv.material3.Border
@@ -62,6 +68,7 @@ import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.example.footballlive.R
 import com.example.footballlive.data.AcestreamStream
+import com.example.footballlive.data.BrowserStream
 import com.example.footballlive.data.MatchParser
 import com.example.footballlive.data.MediaItem
 import com.example.footballlive.data.MockData
@@ -81,6 +88,8 @@ fun MainScreen(
     var isParsingStreams by remember { mutableStateOf(false) }
     var hasSearchedStreams by remember { mutableStateOf(false) }
     var acestreamStreams by remember { mutableStateOf<List<AcestreamStream>>(emptyList()) }
+    var browserStreams by remember { mutableStateOf<List<BrowserStream>>(emptyList()) }
+    var selectedBrowserUrl by remember { mutableStateOf<String?>(null) }
     var showInstallDialog by remember { mutableStateOf(false) }
     var reloadRequest by remember { mutableStateOf(0) }
 
@@ -88,6 +97,7 @@ fun MainScreen(
         isLoadingMatches = true
         selectedMediaItem = null
         acestreamStreams = emptyList()
+        browserStreams = emptyList()
         hasSearchedStreams = false
         val result = parser.parseMatches()
         val loadedItems = result.getOrElse { MockData.mediaItems }
@@ -102,6 +112,10 @@ fun MainScreen(
             acestreamStreams = parser
                 .parseMatchPageForAcestreamLinks(selected.matchUrl)
                 .sortedWith(compareByDescending<AcestreamStream> { it.quality.toIntOrNull() ?: 0 }
+                    .thenByDescending { extractBitrate(it.bitrate) })
+            browserStreams = parser
+                .parseMatchPageForBrowserLinks(selected.matchUrl)
+                .sortedWith(compareByDescending<BrowserStream> { it.quality.toIntOrNull() ?: 0 }
                     .thenByDescending { extractBitrate(it.bitrate) })
             hasSearchedStreams = true
             isParsingStreams = false
@@ -161,6 +175,7 @@ fun MainScreen(
                         onMatchClick = { mediaItem ->
                             selectedMediaItem = mediaItem
                             acestreamStreams = emptyList()
+                            browserStreams = emptyList()
                             hasSearchedStreams = false
                             isParsingStreams = true
                             onMediaItemClick(mediaItem)
@@ -171,6 +186,7 @@ fun MainScreen(
                     MatchDetailPanel(
                         mediaItem = selectedMediaItem,
                         streams = acestreamStreams,
+                        browserStreams = browserStreams,
                         isParsingStreams = isParsingStreams,
                         hasSearchedStreams = hasSearchedStreams,
                         modifier = Modifier
@@ -188,6 +204,9 @@ fun MainScreen(
                                 android.util.Log.d("AceStreamCheck", "Failed to open acestream link: ${e.message}")
                                 showInstallDialog = true
                             }
+                        },
+                        onBrowserStreamClick = { stream ->
+                            selectedBrowserUrl = stream.link
                         }
                     )
                 }
@@ -202,6 +221,13 @@ fun MainScreen(
                 openPlayStore(context)
                 showInstallDialog = false
             }
+        )
+    }
+
+    selectedBrowserUrl?.let { url ->
+        BrowserWebViewDialog(
+            url = url,
+            onDismiss = { selectedBrowserUrl = null }
         )
     }
 }
@@ -237,8 +263,9 @@ private fun Header(
 
             Column {
                 Text(
-                    text = "Goal Stream",
+                    text = "GoalStream",
                     style = MaterialTheme.typography.headlineSmall,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
@@ -319,9 +346,15 @@ private fun MatchRow(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .zIndex(if (isFocused) 1f else 0f),
+        interactionSource = interactionSource,
         shape = CardDefaults.shape(RoundedCornerShape(8.dp)),
         colors = CardDefaults.colors(
             containerColor = if (isSelected) Color(0x332ED47A) else Color.White.copy(alpha = 0.06f),
@@ -352,6 +385,7 @@ private fun MatchRow(
                 Text(
                     text = displayMatchTime(mediaItem.time),
                     style = MaterialTheme.typography.titleMedium,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Black,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -388,11 +422,13 @@ private fun MatchRow(
 private fun MatchDetailPanel(
     mediaItem: MediaItem?,
     streams: List<AcestreamStream>,
+    browserStreams: List<BrowserStream>,
     isParsingStreams: Boolean,
     hasSearchedStreams: Boolean,
     modifier: Modifier = Modifier,
     onSearchStreams: () -> Unit,
-    onStreamClick: (AcestreamStream) -> Unit
+    onStreamClick: (AcestreamStream) -> Unit,
+    onBrowserStreamClick: (BrowserStream) -> Unit
 ) {
     Panel(modifier = modifier) {
         if (mediaItem == null) {
@@ -414,13 +450,15 @@ private fun MatchDetailPanel(
             StreamsSection(
                 mediaItem = mediaItem,
                 streams = streams,
+                browserStreams = browserStreams,
                 isParsingStreams = isParsingStreams,
                 hasSearchedStreams = hasSearchedStreams,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(279.dp),
                 onSearchStreams = onSearchStreams,
-                onStreamClick = onStreamClick
+                onStreamClick = onStreamClick,
+                onBrowserStreamClick = onBrowserStreamClick
             )
         }
     }
@@ -584,18 +622,27 @@ private fun Crest(
 private fun StreamsSection(
     mediaItem: MediaItem,
     streams: List<AcestreamStream>,
+    browserStreams: List<BrowserStream>,
     isParsingStreams: Boolean,
     hasSearchedStreams: Boolean,
     modifier: Modifier = Modifier,
     onSearchStreams: () -> Unit,
-    onStreamClick: (AcestreamStream) -> Unit
+    onStreamClick: (AcestreamStream) -> Unit,
+    onBrowserStreamClick: (BrowserStream) -> Unit
 ) {
+    val streamCards = remember(streams, browserStreams) {
+        buildStreamCards(
+            acestreamStreams = streams,
+            browserStreams = browserStreams
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 0.dp)
     ) {
-        // Заголовок блока трансляций: слева title, справа полная дата/турнир выбранного матча.
+        // Заголовок блока трансляций: справа полная дата/турнир выбранного матча.
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
@@ -613,7 +660,7 @@ private fun StreamsSection(
 
         when {
             isParsingStreams -> StreamsLoading()
-            streams.isNotEmpty() -> {
+            streamCards.isNotEmpty() -> {
                 // Сетка карточек трансляций. contentPadding и spacedBy нужны, чтобы focus-scale не обрезался.
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -627,11 +674,16 @@ private fun StreamsSection(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
-                    items(streams, key = { it.id }) { stream ->
+                    items(streamCards, key = { it.id }) { stream ->
                         StreamCard(
                             stream = stream,
                             modifier = Modifier.padding(vertical = 6.dp),
-                            onClick = { onStreamClick(stream) }
+                            onClick = {
+                                when (stream.source) {
+                                    StreamSource.AceStream -> stream.acestreamStream?.let(onStreamClick)
+                                    StreamSource.Browser -> stream.browserStream?.let(onBrowserStreamClick)
+                                }
+                            }
                         )
                     }
                 }
@@ -645,14 +697,20 @@ private fun StreamsSection(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun StreamCard(
-    stream: AcestreamStream,
+    stream: StreamCardUi,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
     // Карточка одного потока. focusedScale, padding и тексты внутри влияют на обрезание при фокусе.
     Card(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .zIndex(if (isFocused) 1f else 0f),
+        interactionSource = interactionSource,
         shape = CardDefaults.shape(RoundedCornerShape(8.dp)),
         colors = CardDefaults.colors(
             containerColor = Color.White.copy(alpha = 0.07f),
@@ -665,14 +723,14 @@ private fun StreamCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = stream.bitrate.ifBlank { "Поток" },
+                text = stream.primaryText,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = displayStreamQuality(stream.quality),
+                text = stream.secondaryText,
                 style = MaterialTheme.typography.titleMedium,
                 color = Color(0xFF32D583),
                 fontWeight = FontWeight.Black,
@@ -681,13 +739,13 @@ private fun StreamCard(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "AceStream источник",
+                text = stream.sourceLabel,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "▶ Смотреть",
+                text = stream.actionText,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Black
             )
@@ -795,6 +853,7 @@ private fun LoadingState() {
             Text(
                 text = "Загружаем матчи GoalStream",
                 style = MaterialTheme.typography.titleMedium,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -896,6 +955,68 @@ fun InstallAceStreamDialog(
     }
 }
 
+@Composable
+fun BrowserWebViewDialog(
+    url: String,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            shape = RoundedCornerShape(8.dp),
+            color = Color.Black
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Browser трансляция",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    OutlinedButton(onClick = onDismiss) {
+                        Text("Закрыть")
+                    }
+                }
+
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    factory = { context ->
+                        WebView(context).apply {
+                            webViewClient = WebViewClient()
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            loadUrl(url)
+                        }
+                    },
+                    update = { webView ->
+                        if (webView.url != url) {
+                            webView.loadUrl(url)
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
 fun isAceStreamInstalled(context: Context): Boolean {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("acestream://test"))
     val resolveInfo = context.packageManager.resolveActivity(intent, 0)
@@ -910,6 +1031,11 @@ fun isAceStreamInstalled(context: Context): Boolean {
 }
 
 fun openAcestreamLink(context: Context, link: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link))
+    context.startActivity(intent)
+}
+
+fun openBrowserLink(context: Context, link: String) {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link))
     context.startActivity(intent)
 }
@@ -940,4 +1066,57 @@ private fun fullMatchInfo(mediaItem: MediaItem): String {
 private fun displayStreamQuality(quality: String): String {
     val cleanQuality = quality.trim().removeSuffix("%")
     return if (cleanQuality.isBlank()) "?%" else "$cleanQuality%"
+}
+
+private enum class StreamSource(
+    val sortOrder: Int,
+    val label: String
+) {
+    AceStream(sortOrder = 0, label = "Ace Stream источник"),
+    Browser(sortOrder = 1, label = "Browser источник")
+}
+
+private data class StreamCardUi(
+    val id: String,
+    val source: StreamSource,
+    val primaryText: String,
+    val secondaryText: String,
+    val sourceLabel: String,
+    val actionText: String,
+    val acestreamStream: AcestreamStream? = null,
+    val browserStream: BrowserStream? = null
+)
+
+private fun buildStreamCards(
+    acestreamStreams: List<AcestreamStream>,
+    browserStreams: List<BrowserStream>
+): List<StreamCardUi> {
+    val aceCards = acestreamStreams.map { stream ->
+        StreamCardUi(
+            id = "ace-${stream.id}",
+            source = StreamSource.AceStream,
+            primaryText = stream.bitrate.ifBlank { "Поток" },
+            secondaryText = displayStreamQuality(stream.quality),
+            sourceLabel = StreamSource.AceStream.label,
+            actionText = "▶ Смотреть",
+            acestreamStream = stream
+        )
+    }
+
+    val browserCards = browserStreams.map { stream ->
+        StreamCardUi(
+            id = stream.id,
+            source = StreamSource.Browser,
+            primaryText = stream.title,
+            secondaryText = listOf(
+                stream.bitrate,
+                displayStreamQuality(stream.quality)
+            ).filter { it.isNotBlank() && it != "?%" }.joinToString(" • ").ifBlank { "WebPlayer" },
+            sourceLabel = StreamSource.Browser.label,
+            actionText = "▶ Открыть",
+            browserStream = stream
+        )
+    }
+
+    return (aceCards + browserCards).sortedBy { it.source.sortOrder }
 }

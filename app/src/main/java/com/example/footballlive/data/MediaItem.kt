@@ -17,3 +17,11 @@ data class AcestreamStream(
     val quality: String,
     val link: String
 )
+
+data class BrowserStream(
+    val id: String,
+    val title: String,
+    val bitrate: String,
+    val quality: String,
+    val link: String
+)

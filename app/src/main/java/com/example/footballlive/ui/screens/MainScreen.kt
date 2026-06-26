@@ -343,7 +343,11 @@ private fun AppUpdateDialog(
                             enabled = !isDownloading,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Позже")
+                            Text(
+                                text = "Позже",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
 
@@ -352,7 +356,11 @@ private fun AppUpdateDialog(
                         enabled = !isDownloading,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text(if (isDownloading) "Скачиваем..." else "Скачать")
+                        Text(
+                            text = if (isDownloading) "Скачиваем..." else "Скачать",
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.footballlive"
         minSdk = 27
         targetSdk = 36
-        versionCode = 3
-        versionName = "2.0.3"
+        versionCode = 4
+        versionName = "2.0.4"
 
     }
 

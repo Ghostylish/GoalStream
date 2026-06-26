@@ -24,7 +24,7 @@ data class AppUpdateInfo(
 class UpdateRepository {
     // URL файла update.json. Если хранить его как release asset, замени на прямую ссылку GitHub Releases.
     private val updateManifestUrl =
-        "https://raw.githubusercontent.com/Ghostylish/GoalStream/main/update.json"
+        "https://raw.githubusercontent.com/Ghostylish/GoalStream/master/update.json"
 
     suspend fun checkForUpdate(context: Context): Result<AppUpdateInfo?> = withContext(Dispatchers.IO) {
         runCatching {

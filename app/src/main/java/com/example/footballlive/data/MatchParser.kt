@@ -174,6 +174,11 @@ class MatchParser {
                 // Extract quality rating
                 val qualityElement = table.select("td.rate div").first()
                 val quality = qualityElement?.text()?.replace("%", "")?.trim() ?: ""
+
+                val flagUrl = table.select("img[src*=linkflag]").first()
+                    ?.attr("src")
+                    ?.let { toAbsoluteAssetUrl(it) }
+                    ?: ""
                 
                 // Extract acestream link
                 val acestreamLinkElement = table.select("a[href^=acestream://]").first()
@@ -185,7 +190,8 @@ class MatchParser {
                             id = index.toString(),
                             bitrate = bitrate,
                             quality = quality,
-                            link = link
+                            link = link,
+                            flagUrl = flagUrl
                         )
                     )
                 }
@@ -197,49 +203,6 @@ class MatchParser {
         }
     }
 
-    suspend fun parseMatchPageForBrowserLinks(matchUrl: String): List<BrowserStream> = withContext(Dispatchers.IO) {
-        try {
-            val doc: Document = Jsoup.connect(matchUrl)
-                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                .timeout(10000)
-                .get()
-
-            val streams = mutableListOf<BrowserStream>()
-            val lnktbjTables = doc.select("table.lnktbj")
-
-            lnktbjTables.forEachIndexed { index, table ->
-                val bitrate = table.select("td.bitrate").first()?.text() ?: ""
-                val quality = table.select("td.rate div").first()
-                    ?.text()
-                    ?.replace("%", "")
-                    ?.trim()
-                    ?: ""
-                val browserLinkElement = table.select("a[href*=webplayer]").first()
-                val link = browserLinkElement?.attr("href") ?: ""
-
-                if (link.isNotEmpty() && !link.startsWith("acestream://")) {
-                    val title = table.select("td.lnktyt span").first()?.text()?.trim()
-                        ?.ifBlank { null }
-                        ?: "WebPlayer"
-
-                    streams.add(
-                        BrowserStream(
-                            id = index.toString(),
-                            title = title,
-                            bitrate = bitrate,
-                            quality = quality,
-                            link = toAbsoluteLiveTvUrl(link)
-                        )
-                    )
-                }
-            }
-
-            streams
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-    
     suspend fun parseMatchPageForAcestreamLink(matchUrl: String): String = withContext(Dispatchers.IO) {
         try {
             val doc: Document = Jsoup.connect(matchUrl)
@@ -285,12 +248,12 @@ class MatchParser {
         return (1..32).map { chars.random() }.joinToString("")
     }
 
-    private fun toAbsoluteLiveTvUrl(link: String): String {
+    private fun toAbsoluteAssetUrl(url: String): String {
         return when {
-            link.startsWith("//") -> "https:$link"
-            link.startsWith("/") -> "https://livetv901.me$link"
-            link.startsWith("http") -> link
-            else -> "https://livetv901.me/$link"
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> "https://livetv901.me$url"
+            else -> url
         }
     }
+
 }

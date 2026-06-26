@@ -15,13 +15,6 @@ data class AcestreamStream(
     val id: String,
     val bitrate: String,
     val quality: String,
-    val link: String
-)
-
-data class BrowserStream(
-    val id: String,
-    val title: String,
-    val bitrate: String,
-    val quality: String,
-    val link: String
+    val link: String,
+    val flagUrl: String = ""
 )

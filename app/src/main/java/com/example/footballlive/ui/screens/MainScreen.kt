@@ -5,8 +5,7 @@ package com.example.footballlive.ui.screens
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.os.Build
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -37,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,7 +51,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
@@ -68,10 +67,12 @@ import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.example.footballlive.R
 import com.example.footballlive.data.AcestreamStream
-import com.example.footballlive.data.BrowserStream
+import com.example.footballlive.data.AppUpdateInfo
 import com.example.footballlive.data.MatchParser
 import com.example.footballlive.data.MediaItem
 import com.example.footballlive.data.MockData
+import com.example.footballlive.data.UpdateRepository
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -81,6 +82,8 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val parser = remember { MatchParser() }
+    val updateRepository = remember { UpdateRepository() }
+    val coroutineScope = rememberCoroutineScope()
 
     var mediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var selectedMediaItem by remember { mutableStateOf<MediaItem?>(null) }
@@ -88,16 +91,16 @@ fun MainScreen(
     var isParsingStreams by remember { mutableStateOf(false) }
     var hasSearchedStreams by remember { mutableStateOf(false) }
     var acestreamStreams by remember { mutableStateOf<List<AcestreamStream>>(emptyList()) }
-    var browserStreams by remember { mutableStateOf<List<BrowserStream>>(emptyList()) }
-    var selectedBrowserUrl by remember { mutableStateOf<String?>(null) }
     var showInstallDialog by remember { mutableStateOf(false) }
     var reloadRequest by remember { mutableStateOf(0) }
+    var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var isDownloadingUpdate by remember { mutableStateOf(false) }
+    var updateError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(reloadRequest) {
         isLoadingMatches = true
         selectedMediaItem = null
         acestreamStreams = emptyList()
-        browserStreams = emptyList()
         hasSearchedStreams = false
         val result = parser.parseMatches()
         val loadedItems = result.getOrElse { MockData.mediaItems }
@@ -106,16 +109,20 @@ fun MainScreen(
         isLoadingMatches = false
     }
 
+    LaunchedEffect(Unit) {
+        updateRepository.checkForUpdate(context)
+            .onSuccess { updateInfo -> availableUpdate = updateInfo }
+            .onFailure { error ->
+                android.util.Log.d("UpdateCheck", "Failed to check update: ${error.message}")
+            }
+    }
+
     LaunchedEffect(selectedMediaItem, isParsingStreams) {
         val selected = selectedMediaItem
         if (selected != null && isParsingStreams) {
             acestreamStreams = parser
                 .parseMatchPageForAcestreamLinks(selected.matchUrl)
                 .sortedWith(compareByDescending<AcestreamStream> { it.quality.toIntOrNull() ?: 0 }
-                    .thenByDescending { extractBitrate(it.bitrate) })
-            browserStreams = parser
-                .parseMatchPageForBrowserLinks(selected.matchUrl)
-                .sortedWith(compareByDescending<BrowserStream> { it.quality.toIntOrNull() ?: 0 }
                     .thenByDescending { extractBitrate(it.bitrate) })
             hasSearchedStreams = true
             isParsingStreams = false
@@ -175,7 +182,6 @@ fun MainScreen(
                         onMatchClick = { mediaItem ->
                             selectedMediaItem = mediaItem
                             acestreamStreams = emptyList()
-                            browserStreams = emptyList()
                             hasSearchedStreams = false
                             isParsingStreams = true
                             onMediaItemClick(mediaItem)
@@ -186,7 +192,6 @@ fun MainScreen(
                     MatchDetailPanel(
                         mediaItem = selectedMediaItem,
                         streams = acestreamStreams,
-                        browserStreams = browserStreams,
                         isParsingStreams = isParsingStreams,
                         hasSearchedStreams = hasSearchedStreams,
                         modifier = Modifier
@@ -204,14 +209,48 @@ fun MainScreen(
                                 android.util.Log.d("AceStreamCheck", "Failed to open acestream link: ${e.message}")
                                 showInstallDialog = true
                             }
-                        },
-                        onBrowserStreamClick = { stream ->
-                            selectedBrowserUrl = stream.link
                         }
                     )
                 }
             }
         }
+    }
+
+    availableUpdate?.let { updateInfo ->
+        AppUpdateDialog(
+            updateInfo = updateInfo,
+            isDownloading = isDownloadingUpdate,
+            errorMessage = updateError,
+            onDismiss = {
+                if (!updateInfo.required && !isDownloadingUpdate) {
+                    availableUpdate = null
+                    updateError = null
+                }
+            },
+            onInstall = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                    !context.packageManager.canRequestPackageInstalls()
+                ) {
+                    updateRepository.openInstallPermissionSettings(context)
+                    updateError = "Разреши установку из этого источника и нажми обновить еще раз."
+                    return@AppUpdateDialog
+                }
+
+                coroutineScope.launch {
+                    isDownloadingUpdate = true
+                    updateError = null
+                    updateRepository.downloadApk(context, updateInfo)
+                        .onSuccess { apkFile ->
+                            isDownloadingUpdate = false
+                            updateRepository.installApk(context, apkFile)
+                        }
+                        .onFailure { error ->
+                            isDownloadingUpdate = false
+                            updateError = error.message ?: "Не удалось скачать APK."
+                        }
+                }
+            }
+        )
     }
 
     if (showInstallDialog) {
@@ -224,11 +263,100 @@ fun MainScreen(
         )
     }
 
-    selectedBrowserUrl?.let { url ->
-        BrowserWebViewDialog(
-            url = url,
-            onDismiss = { selectedBrowserUrl = null }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun AppUpdateDialog(
+    updateInfo: AppUpdateInfo,
+    isDownloading: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onInstall: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = !updateInfo.required && !isDownloading,
+            dismissOnClickOutside = !updateInfo.required && !isDownloading
         )
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(32.dp),
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Доступно обновление GoalStream",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Версия ${updateInfo.versionName}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFF32D583),
+                    fontWeight = FontWeight.Black
+                )
+
+                if (updateInfo.changelog.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = updateInfo.changelog,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFF97066),
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    if (!updateInfo.required) {
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            enabled = !isDownloading,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Позже")
+                        }
+                    }
+
+                    Button(
+                        onClick = onInstall,
+                        enabled = !isDownloading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (isDownloading) "Скачиваем..." else "Скачать")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -422,13 +550,11 @@ private fun MatchRow(
 private fun MatchDetailPanel(
     mediaItem: MediaItem?,
     streams: List<AcestreamStream>,
-    browserStreams: List<BrowserStream>,
     isParsingStreams: Boolean,
     hasSearchedStreams: Boolean,
     modifier: Modifier = Modifier,
     onSearchStreams: () -> Unit,
-    onStreamClick: (AcestreamStream) -> Unit,
-    onBrowserStreamClick: (BrowserStream) -> Unit
+    onStreamClick: (AcestreamStream) -> Unit
 ) {
     Panel(modifier = modifier) {
         if (mediaItem == null) {
@@ -450,15 +576,13 @@ private fun MatchDetailPanel(
             StreamsSection(
                 mediaItem = mediaItem,
                 streams = streams,
-                browserStreams = browserStreams,
                 isParsingStreams = isParsingStreams,
                 hasSearchedStreams = hasSearchedStreams,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(279.dp),
                 onSearchStreams = onSearchStreams,
-                onStreamClick = onStreamClick,
-                onBrowserStreamClick = onBrowserStreamClick
+                onStreamClick = onStreamClick
             )
         }
     }
@@ -542,7 +666,9 @@ private fun MatchFullInfo(text: String) {
     ) {
         Text(
             text = text,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.Bold,
@@ -622,21 +748,12 @@ private fun Crest(
 private fun StreamsSection(
     mediaItem: MediaItem,
     streams: List<AcestreamStream>,
-    browserStreams: List<BrowserStream>,
     isParsingStreams: Boolean,
     hasSearchedStreams: Boolean,
     modifier: Modifier = Modifier,
     onSearchStreams: () -> Unit,
-    onStreamClick: (AcestreamStream) -> Unit,
-    onBrowserStreamClick: (BrowserStream) -> Unit
+    onStreamClick: (AcestreamStream) -> Unit
 ) {
-    val streamCards = remember(streams, browserStreams) {
-        buildStreamCards(
-            acestreamStreams = streams,
-            browserStreams = browserStreams
-        )
-    }
-
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -650,9 +767,11 @@ private fun StreamsSection(
         ) {
             Text(
                 text = fullMatchInfo(mediaItem),
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
             )
         }
 
@@ -660,7 +779,7 @@ private fun StreamsSection(
 
         when {
             isParsingStreams -> StreamsLoading()
-            streamCards.isNotEmpty() -> {
+            streams.isNotEmpty() -> {
                 // Сетка карточек трансляций. contentPadding и spacedBy нужны, чтобы focus-scale не обрезался.
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -674,16 +793,11 @@ private fun StreamsSection(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
-                    items(streamCards, key = { it.id }) { stream ->
+                    items(streams, key = { it.id }) { stream ->
                         StreamCard(
                             stream = stream,
                             modifier = Modifier.padding(vertical = 6.dp),
-                            onClick = {
-                                when (stream.source) {
-                                    StreamSource.AceStream -> stream.acestreamStream?.let(onStreamClick)
-                                    StreamSource.Browser -> stream.browserStream?.let(onBrowserStreamClick)
-                                }
-                            }
+                            onClick = { onStreamClick(stream) }
                         )
                     }
                 }
@@ -697,7 +811,7 @@ private fun StreamsSection(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun StreamCard(
-    stream: StreamCardUi,
+    stream: AcestreamStream,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
@@ -721,33 +835,62 @@ private fun StreamCard(
             focusedBorder = Border(BorderStroke(2.dp, Color(0xFF32D583)))
         )
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
-                text = stream.primaryText,
+                text = stream.bitrate.ifBlank { "Поток" },
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
-            Text(
-                text = stream.secondaryText,
-                style = MaterialTheme.typography.titleMedium,
-                color = Color(0xFF32D583),
-                fontWeight = FontWeight.Black,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (stream.flagUrl.isNotBlank()) {
+                    AsyncImage(
+                        model = stream.flagUrl,
+                        contentDescription = "Stream language",
+                        modifier = Modifier.size(width = 24.dp, height = 18.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Text(
+                        text = displayStreamQuality(stream.quality),
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color(0xFF32D583),
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = stream.sourceLabel,
+                text = "AceStream источник",
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = stream.actionText,
+                text = "▶ Смотреть",
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Black
+                fontWeight = FontWeight.Black,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -955,68 +1098,6 @@ fun InstallAceStreamDialog(
     }
 }
 
-@Composable
-fun BrowserWebViewDialog(
-    url: String,
-    onDismiss: () -> Unit
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false,
-            usePlatformDefaultWidth = false
-        )
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            shape = RoundedCornerShape(8.dp),
-            color = Color.Black
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Browser трансляция",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    OutlinedButton(onClick = onDismiss) {
-                        Text("Закрыть")
-                    }
-                }
-
-                AndroidView(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    factory = { context ->
-                        WebView(context).apply {
-                            webViewClient = WebViewClient()
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            loadUrl(url)
-                        }
-                    },
-                    update = { webView ->
-                        if (webView.url != url) {
-                            webView.loadUrl(url)
-                        }
-                    }
-                )
-            }
-        }
-    }
-}
-
 fun isAceStreamInstalled(context: Context): Boolean {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("acestream://test"))
     val resolveInfo = context.packageManager.resolveActivity(intent, 0)
@@ -1031,11 +1112,6 @@ fun isAceStreamInstalled(context: Context): Boolean {
 }
 
 fun openAcestreamLink(context: Context, link: String) {
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link))
-    context.startActivity(intent)
-}
-
-fun openBrowserLink(context: Context, link: String) {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link))
     context.startActivity(intent)
 }
@@ -1066,57 +1142,4 @@ private fun fullMatchInfo(mediaItem: MediaItem): String {
 private fun displayStreamQuality(quality: String): String {
     val cleanQuality = quality.trim().removeSuffix("%")
     return if (cleanQuality.isBlank()) "?%" else "$cleanQuality%"
-}
-
-private enum class StreamSource(
-    val sortOrder: Int,
-    val label: String
-) {
-    AceStream(sortOrder = 0, label = "Ace Stream источник"),
-    Browser(sortOrder = 1, label = "Browser источник")
-}
-
-private data class StreamCardUi(
-    val id: String,
-    val source: StreamSource,
-    val primaryText: String,
-    val secondaryText: String,
-    val sourceLabel: String,
-    val actionText: String,
-    val acestreamStream: AcestreamStream? = null,
-    val browserStream: BrowserStream? = null
-)
-
-private fun buildStreamCards(
-    acestreamStreams: List<AcestreamStream>,
-    browserStreams: List<BrowserStream>
-): List<StreamCardUi> {
-    val aceCards = acestreamStreams.map { stream ->
-        StreamCardUi(
-            id = "ace-${stream.id}",
-            source = StreamSource.AceStream,
-            primaryText = stream.bitrate.ifBlank { "Поток" },
-            secondaryText = displayStreamQuality(stream.quality),
-            sourceLabel = StreamSource.AceStream.label,
-            actionText = "▶ Смотреть",
-            acestreamStream = stream
-        )
-    }
-
-    val browserCards = browserStreams.map { stream ->
-        StreamCardUi(
-            id = stream.id,
-            source = StreamSource.Browser,
-            primaryText = stream.title,
-            secondaryText = listOf(
-                stream.bitrate,
-                displayStreamQuality(stream.quality)
-            ).filter { it.isNotBlank() && it != "?%" }.joinToString(" • ").ifBlank { "WebPlayer" },
-            sourceLabel = StreamSource.Browser.label,
-            actionText = "▶ Открыть",
-            browserStream = stream
-        )
-    }
-
-    return (aceCards + browserCards).sortedBy { it.source.sortOrder }
 }

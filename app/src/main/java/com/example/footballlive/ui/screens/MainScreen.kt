@@ -4,15 +4,21 @@ package com.example.footballlive.ui.screens
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,15 +28,21 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Button as MaterialButton
+import androidx.compose.material3.OutlinedButton as MaterialOutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -74,6 +87,17 @@ import com.example.footballlive.data.MockData
 import com.example.footballlive.data.UpdateRepository
 import kotlinx.coroutines.launch
 
+private val MobileTextPrimary = Color(0xFFF7FBF8)
+private val MobileTextSecondary = Color(0xBFDCE7E1)
+
+@Composable
+private fun isMobileUi(): Boolean {
+    val configuration = LocalConfiguration.current
+    val isTelevision = configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+        Configuration.UI_MODE_TYPE_TELEVISION
+    return !isTelevision && configuration.screenWidthDp < 700
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -81,6 +105,7 @@ fun MainScreen(
     onMediaItemClick: (MediaItem) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val isMobileUi = isMobileUi()
     val parser = remember { MatchParser() }
     val updateRepository = remember { UpdateRepository() }
     val coroutineScope = rememberCoroutineScope()
@@ -96,12 +121,14 @@ fun MainScreen(
     var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
     var updateError by remember { mutableStateOf<String?>(null) }
+    var showMobileDetails by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadRequest) {
         isLoadingMatches = true
         selectedMediaItem = null
         acestreamStreams = emptyList()
         hasSearchedStreams = false
+        showMobileDetails = false
         val result = parser.parseMatches()
         val loadedItems = result.getOrElse { MockData.mediaItems }
         mediaItems = parser.loadTeamImages(loadedItems)
@@ -153,6 +180,44 @@ fun MainScreen(
         if (isLoadingMatches) {
             LoadingState()
         } else {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                if (isMobileUi && maxWidth < 700.dp) {
+                    MobileMainContent(
+                        mediaItems = mediaItems,
+                        selectedMediaItem = selectedMediaItem,
+                        streams = acestreamStreams,
+                        isParsingStreams = isParsingStreams,
+                        hasSearchedStreams = hasSearchedStreams,
+                        showDetails = showMobileDetails,
+                        onRefresh = {
+                            reloadRequest++
+                        },
+                        onBackToMatches = {
+                            showMobileDetails = false
+                        },
+                        onMatchClick = { mediaItem ->
+                            selectedMediaItem = mediaItem
+                            acestreamStreams = emptyList()
+                            hasSearchedStreams = false
+                            isParsingStreams = true
+                            showMobileDetails = true
+                            onMediaItemClick(mediaItem)
+                        },
+                        onSearchStreams = {
+                            acestreamStreams = emptyList()
+                            hasSearchedStreams = false
+                            isParsingStreams = true
+                        },
+                        onStreamClick = { stream ->
+                            try {
+                                openAcestreamLink(context, stream.link)
+                            } catch (e: Exception) {
+                                android.util.Log.d("AceStreamCheck", "Failed to open acestream link: ${e.message}")
+                                showInstallDialog = true
+                            }
+                        }
+                    )
+                } else {
             // Главный контейнер экрана: здесь настраиваются общие отступы от краёв ТВ-экрана.
             Column(
                 modifier = Modifier
@@ -211,6 +276,8 @@ fun MainScreen(
                             }
                         }
                     )
+                }
+            }
                 }
             }
         }
@@ -274,6 +341,8 @@ private fun AppUpdateDialog(
     onDismiss: () -> Unit,
     onInstall: () -> Unit
 ) {
+    val isMobile = isMobileUi()
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -286,7 +355,7 @@ private fun AppUpdateDialog(
                 .fillMaxWidth()
                 .padding(32.dp),
             shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surface
+            color = if (isMobile) Color(0xFF111A16) else MaterialTheme.colorScheme.surface
         ) {
             Column(
                 modifier = Modifier
@@ -296,8 +365,12 @@ private fun AppUpdateDialog(
             ) {
                 Text(
                     text = "Доступно обновление GoalStream",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    style = if (isMobile) {
+                        MaterialTheme.typography.titleLarge
+                    } else {
+                        MaterialTheme.typography.headlineMedium
+                    },
+                    color = if (isMobile) MobileTextPrimary else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                 )
@@ -315,8 +388,12 @@ private fun AppUpdateDialog(
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
                         text = updateInfo.changelog,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = if (isMobile) {
+                            MaterialTheme.typography.bodyMedium
+                        } else {
+                            MaterialTheme.typography.bodyLarge
+                        },
+                        color = if (isMobile) MobileTextSecondary else MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -338,32 +415,516 @@ private fun AppUpdateDialog(
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     if (!updateInfo.required) {
-                        OutlinedButton(
-                            onClick = onDismiss,
+                        if (isMobile) {
+                            MaterialOutlinedButton(
+                                onClick = onDismiss,
+                                enabled = !isDownloading,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = "Позже",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = onDismiss,
+                                enabled = !isDownloading,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = "Позже",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
+                    if (isMobile) {
+                        MaterialButton(
+                            onClick = onInstall,
                             enabled = !isDownloading,
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(
-                                text = "Позже",
+                                text = if (isDownloading) "Скачиваем..." else "Скачать",
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = onInstall,
+                            enabled = !isDownloading,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = if (isDownloading) "Скачиваем..." else "Скачать",
                                 modifier = Modifier.fillMaxWidth(),
                                 textAlign = TextAlign.Center
                             )
                         }
                     }
-
-                    Button(
-                        onClick = onInstall,
-                        enabled = !isDownloading,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(
-                            text = if (isDownloading) "Скачиваем..." else "Скачать",
-                            modifier = Modifier.fillMaxWidth(),
-                            textAlign = TextAlign.Center
-                        )
-                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MobileMainContent(
+    mediaItems: List<MediaItem>,
+    selectedMediaItem: MediaItem?,
+    streams: List<AcestreamStream>,
+    isParsingStreams: Boolean,
+    hasSearchedStreams: Boolean,
+    showDetails: Boolean,
+    onRefresh: () -> Unit,
+    onBackToMatches: () -> Unit,
+    onMatchClick: (MediaItem) -> Unit,
+    onSearchStreams: () -> Unit,
+    onStreamClick: (AcestreamStream) -> Unit
+) {
+    val context = LocalContext.current
+    var lastBackPressTime by remember { mutableStateOf(0L) }
+
+    BackHandler {
+        if (showDetails && selectedMediaItem != null) {
+            onBackToMatches()
+            return@BackHandler
+        }
+
+        val now = System.currentTimeMillis()
+        if (now - lastBackPressTime < 1800L) {
+            (context as? Activity)?.finish()
+        } else {
+            lastBackPressTime = now
+            Toast.makeText(context, "Нажмите назад еще раз для выхода", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(start = 16.dp, top = 18.dp, end = 16.dp, bottom = 18.dp)
+    ) {
+        if (showDetails && selectedMediaItem != null) {
+            MobileMatchDetails(
+                mediaItem = selectedMediaItem,
+                streams = streams,
+                isParsingStreams = isParsingStreams,
+                hasSearchedStreams = hasSearchedStreams,
+                onBack = onBackToMatches,
+                onSearchStreams = onSearchStreams,
+                onStreamClick = onStreamClick
+            )
+        } else {
+            MobileMatchesList(
+                mediaItems = mediaItems,
+                onRefresh = onRefresh,
+                onMatchClick = onMatchClick
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileMatchesList(
+    mediaItems: List<MediaItem>,
+    onRefresh: () -> Unit,
+    onMatchClick: (MediaItem) -> Unit
+) {
+    MobileHeader(onRefresh = onRefresh)
+
+    Spacer(modifier = Modifier.height(14.dp))
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        items(mediaItems, key = { it.id }) { mediaItem ->
+            MobileMatchCard(
+                mediaItem = mediaItem,
+                onClick = { onMatchClick(mediaItem) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileHeader(onRefresh: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                painter = painterResource(id = R.mipmap.ic_launcher),
+                contentDescription = "GoalStream",
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Fit
+            )
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Text(
+                text = "GoalStream",
+                style = MaterialTheme.typography.titleLarge,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = MobileTextPrimary
+            )
+        }
+
+        MaterialOutlinedButton(onClick = onRefresh) {
+            Text(
+                text = "Обновить",
+                color = MobileTextPrimary,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileMatchCard(
+    mediaItem: MediaItem,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(68.dp)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (isLive(mediaItem.time)) Color(0xCCF04438) else Color.White.copy(alpha = 0.08f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = displayMatchTime(mediaItem.time),
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Black,
+                    color = MobileTextPrimary,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = mediaItem.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MobileTextPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = fullMatchInfo(mediaItem),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MobileTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileMatchDetails(
+    mediaItem: MediaItem,
+    streams: List<AcestreamStream>,
+    isParsingStreams: Boolean,
+    hasSearchedStreams: Boolean,
+    onBack: () -> Unit,
+    onSearchStreams: () -> Unit,
+    onStreamClick: (AcestreamStream) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MaterialOutlinedButton(onClick = onBack) {
+                    Text(
+                        text = "Назад",
+                        color = MobileTextPrimary
+                    )
+                }
+
+                Text(
+                    text = "Трансляции",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MobileTextPrimary
+                )
+            }
+        }
+
+        item {
+            MobileTeamBlock(mediaItem = mediaItem)
+        }
+
+        when {
+            isParsingStreams -> {
+                item { MobileStreamsLoading() }
+            }
+            streams.isNotEmpty() -> {
+                items(streams, key = { it.id }) { stream ->
+                    MobileStreamCard(
+                        stream = stream,
+                        onClick = { onStreamClick(stream) }
+                    )
+                }
+            }
+            hasSearchedStreams -> {
+                item { MobileNoStreams(onRefresh = onSearchStreams) }
+            }
+            else -> {
+                item { MobileSearchPrompt(onSearchStreams = onSearchStreams) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileTeamBlock(mediaItem: MediaItem) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = mediaItem.title,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Black,
+                color = MobileTextPrimary,
+                textAlign = TextAlign.Center,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Crest(imageUrl = mediaItem.homeTeamImage, fallback = "H", modifier = Modifier.weight(1f))
+                Text(
+                    text = "VS",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFF32D583),
+                    fontWeight = FontWeight.Black
+                )
+                Crest(imageUrl = mediaItem.awayTeamImage, fallback = "A", modifier = Modifier.weight(1f))
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = fullMatchInfo(mediaItem),
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MobileTextSecondary,
+                textAlign = TextAlign.Center,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileStreamCard(
+    stream: AcestreamStream,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stream.bitrate.ifBlank { "Поток" },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MobileTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "AceStream",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MobileTextSecondary
+                )
+            }
+
+            if (stream.flagUrl.isNotBlank()) {
+                AsyncImage(
+                    model = stream.flagUrl,
+                    contentDescription = "Stream language",
+                    modifier = Modifier.size(width = 26.dp, height = 20.dp),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                Text(
+                    text = displayStreamQuality(stream.quality),
+                    color = Color(0xFF32D583),
+                    fontWeight = FontWeight.Black
+                )
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Text(
+                text = "Смотреть",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Black,
+                color = MobileTextPrimary
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileSearchPrompt(onSearchStreams: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Трансляции еще не проверялись",
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MobileTextPrimary,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            MaterialButton(onClick = onSearchStreams) {
+                Text(
+                    text = "Найти трансляции",
+                    color = MobileTextPrimary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileNoStreams(onRefresh: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Трансляций пока нет",
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MobileTextPrimary,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            MaterialOutlinedButton(onClick = onRefresh) {
+                Text(
+                    text = "Повторить",
+                    color = MobileTextPrimary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileStreamsLoading() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(32.dp))
+            Text(
+                text = "Ищем трансляции...",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MobileTextPrimary
+            )
         }
     }
 }
@@ -1005,7 +1566,8 @@ private fun LoadingState() {
                 text = "Загружаем матчи GoalStream",
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = MobileTextPrimary
             )
         }
     }
@@ -1047,6 +1609,8 @@ fun InstallAceStreamDialog(
     onDismiss: () -> Unit,
     onInstall: () -> Unit
 ) {
+    val isMobile = isMobileUi()
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -1059,7 +1623,7 @@ fun InstallAceStreamDialog(
                 .fillMaxWidth()
                 .padding(32.dp),
             shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surface
+            color = if (isMobile) Color(0xFF111A16) else MaterialTheme.colorScheme.surface
         ) {
             Column(
                 modifier = Modifier
@@ -1069,16 +1633,28 @@ fun InstallAceStreamDialog(
             ) {
                 Text(
                     text = "Ace Stream не установлен",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    modifier = Modifier.fillMaxWidth(),
+                    style = if (isMobile) {
+                        MaterialTheme.typography.titleLarge
+                    } else {
+                        MaterialTheme.typography.headlineMedium
+                    },
+                    color = if (isMobile) MobileTextPrimary else MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center
                 )
 
                 Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
                     text = "Хотите установить Ace Stream?",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    modifier = Modifier.fillMaxWidth(),
+                    style = if (isMobile) {
+                        MaterialTheme.typography.bodyMedium
+                    } else {
+                        MaterialTheme.typography.bodyLarge
+                    },
+                    color = if (isMobile) MobileTextSecondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -1087,18 +1663,54 @@ fun InstallAceStreamDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Закрыть")
+                    if (isMobile) {
+                        MaterialOutlinedButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "Позже",
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "Позже",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
 
-                    Button(
-                        onClick = onInstall,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("OK")
+                    if (isMobile) {
+                        MaterialButton(
+                            onClick = onInstall,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "OK",
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = onInstall,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "OK",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
             }

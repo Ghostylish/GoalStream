@@ -3,6 +3,7 @@ package com.example.footballlive.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -10,6 +11,8 @@ import org.jsoup.nodes.Element
 
 class MatchParser {
     private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    private val requestTimeoutMs = 12_000
+    private val retryDelayMs = 700L
 
     private data class NewsPreview(
         val title: String,
@@ -17,15 +20,35 @@ class MatchParser {
         val url: String
     )
 
+    private suspend fun fetchDocument(url: String, attempts: Int = 3): Document {
+        var lastError: Exception? = null
+
+        repeat(attempts) { attempt ->
+            try {
+                return Jsoup.connect(url)
+                    .userAgent(userAgent)
+                    .referrer("https://livetv901.me/ua/")
+                    .header("Cache-Control", "no-cache")
+                    .header("Pragma", "no-cache")
+                    .followRedirects(true)
+                    .timeout(requestTimeoutMs)
+                    .get()
+            } catch (e: Exception) {
+                lastError = e
+                if (attempt < attempts - 1) {
+                    delay(retryDelayMs)
+                }
+            }
+        }
+
+        throw lastError ?: IllegalStateException("Failed to load $url")
+    }
+
     suspend fun parseFootballNews(): Result<List<NewsArticle>> = withContext(Dispatchers.IO) {
         try {
-            val doc: Document = Jsoup.connect("https://livetv901.me/ua/lenta/full/")
-                .userAgent(userAgent)
-                .timeout(10000)
-                .get()
+            val doc: Document = fetchDocument("https://livetv901.me/ua/lenta/full/")
 
-            val articles = doc.select("a[href]")
-                .mapNotNull { anchor -> parseNewsListItem(anchor) }
+            val articles = parseNewsPreviews(doc)
                 .distinctBy { it.url }
                 .take(12)
                 .map { preview ->
@@ -41,7 +64,26 @@ class MatchParser {
         }
     }
 
-    private fun parseNewsListItem(anchor: Element): NewsPreview? {
+    private fun parseNewsPreviews(doc: Document): List<NewsPreview> {
+        return doc.select(".date, .tnws")
+            .filter { metaElement -> isFootballNewsMeta(metaElement) }
+            .flatMap { metaElement ->
+                val container = metaElement.parents().firstOrNull { parent ->
+                    parent.select("a[href~=/lenta/\\d+_]").isNotEmpty()
+                } ?: metaElement.parent()
+
+                container?.select("a[href~=/lenta/\\d+_]")?.mapNotNull { anchor ->
+                    parseNewsListItem(anchor, metaElement.text())
+                }.orEmpty()
+            }
+    }
+
+    private fun isFootballNewsMeta(element: Element): Boolean {
+        return element.text().contains("Футбол", ignoreCase = true) ||
+            element.select("a[href*=/lenta/sport/1/]").isNotEmpty()
+    }
+
+    private fun parseNewsListItem(anchor: Element, metaText: String? = null): NewsPreview? {
         val title = anchor.text()
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -49,17 +91,19 @@ class MatchParser {
         if (title.isBlank() || href.isBlank()) return null
         if (!Regex("/lenta/\\d+_").containsMatchIn(href)) return null
 
-        val container = anchor.parents().firstOrNull { parent ->
+        val dateText = metaText?.replace(Regex("\\s+"), " ")?.trim() ?: run {
+            val container = anchor.parents().firstOrNull { parent ->
             parent.select(".date, .tnws").isNotEmpty()
         } ?: return null
 
-        val dateText = container.select(".date, .tnws").firstOrNull()
+            container.select(".date, .tnws").firstOrNull()
             ?.text()
             ?.replace(Regex("\\s+"), " ")
             ?.trim()
             ?: return null
+        }
 
-        if (!dateText.contains("Футбол", ignoreCase = true)) return null
+        if (!dateText.contains("Футбол", ignoreCase = true) && metaText == null) return null
 
         val publishedAt = extractNewsPublishedAt(dateText)
 
@@ -90,16 +134,13 @@ class MatchParser {
         return withoutCategory.ifBlank { normalized }
     }
 
-    private fun parseNewsArticlePage(
+    private suspend fun parseNewsArticlePage(
         url: String,
         fallbackTitle: String,
         publishedAt: String
     ): NewsArticle {
         return try {
-            val doc: Document = Jsoup.connect(url)
-                .userAgent(userAgent)
-                .timeout(10000)
-                .get()
+            val doc: Document = fetchDocument(url)
 
             val textElement = findNewsTextElement(doc)
             val bannerUrl = findNewsBannerUrl(doc, textElement)
@@ -180,68 +221,79 @@ class MatchParser {
     
     suspend fun parseMatches(): Result<List<MediaItem>> = withContext(Dispatchers.IO) {
         try {
-            val doc: Document = Jsoup.connect("https://livetv901.me/ua/allupcomingsports/1/")
-                .userAgent(userAgent)
-                .timeout(10000)
-                .get()
-            
-            val mediaItems = mutableListOf<MediaItem>()
-            
-            // Try to select the specific table using the provided JS path selector
-            // JS path: body > table > tbody > tr > td:nth-child(2) > table > tbody > tr:nth-child(4) > td > table > tbody > tr > td:nth-child(2) > table > tbody > tr > td > table > tbody > tr:nth-child(2) > td > table > tbody > tr > td > table > tbody > tr > td > table:nth-child(5) > tbody > tr > td:nth-child(2) > table:nth-child(2)
-            val specificTable = doc.select("body > table > tbody > tr > td:nth-child(2) > table > tbody > tr:nth-child(4) > td > table > tbody > tr > td:nth-child(2) > table > tbody > tr > td > table > tbody > tr:nth-child(2) > td > table > tbody > tr > td > table > tbody > tr > td > table:nth-child(5) > tbody > tr > td:nth-child(2) > table:nth-child(2)").first()
-            
-            val matchRows = if (specificTable != null) {
-                specificTable.select("tbody tr td[colspan=\"2\"]")
-            } else {
-                // Fallback to general selector if specific table not found
-                doc.select("table tbody tr td[colspan=\"2\"]")
-            }
-            
-            matchRows.forEachIndexed { index, element ->
-                val titleElement = element.select("a.live").first()
-                val title = titleElement?.text() ?: "Unknown Match"
-                val link = titleElement?.attr("href") ?: ""
-                
-                // Parse full match schedule info. Some pages keep the tournament
-                // outside span.evdesc, so fallback to the whole row text.
-                val evdesc = element.select("span.evdesc").first()
-                val evdescText = evdesc?.text()
-                    ?.replace(Regex("\\s+"), " ")
-                    ?.trim()
-                    ?: ""
-                val rowText = element.text()
-                    .replace(Regex("\\s+"), " ")
-                    .trim()
-                val rowInfo = rowText
-                    .removePrefix(title)
-                    .trim()
-                    .removePrefix("-")
-                    .trim()
-                val time = when {
-                    rowInfo.contains(Regex("\\d{1,2}:\\d{2}")) && rowInfo.length > evdescText.length -> rowInfo
-                    else -> evdescText
+            var mediaItems = emptyList<MediaItem>()
+
+            for (attempt in 0 until 3) {
+                try {
+                    val doc = fetchDocument("https://livetv901.me/ua/allupcomingsports/1/", attempts = 1)
+                    mediaItems = parseMatchesDocument(doc)
+                } catch (e: Exception) {
+                    mediaItems = emptyList()
                 }
-                
-                // Convert relative match link to absolute
-                val matchUrl = toAbsoluteUrl(link)
-                
-                mediaItems.add(
-                    MediaItem(
-                        id = index.toString(),
-                        title = title,
-                        imageUrl = "",
-                        aceStreamUrl = "",
-                        time = time,
-                        matchUrl = matchUrl
-                    )
-                )
+
+                if (mediaItems.isNotEmpty()) {
+                    break
+                }
+
+                if (attempt < 2) {
+                    delay(retryDelayMs)
+                }
             }
-            
-            Result.success(mediaItems)
+
+            if (mediaItems.isEmpty()) {
+                Result.failure(IllegalStateException("No matches parsed from LiveTV"))
+            } else {
+                Result.success(mediaItems)
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private fun parseMatchesDocument(doc: Document): List<MediaItem> {
+        return doc.select("a.live[href], a[href*=transmatch], a[href*=/eventinfo/]")
+            .mapNotNull { titleElement ->
+            val title = titleElement.text()
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            val link = titleElement.attr("href").trim()
+                if (title.isBlank() || link.isBlank()) return@mapNotNull null
+
+                val element = titleElement.parents().firstOrNull { parent ->
+                    parent.`is`("td[colspan=2]") || parent.select("span.evdesc").isNotEmpty()
+                } ?: titleElement.parent()
+                if (element == null) return@mapNotNull null
+
+            // Parse full match schedule info. Some pages keep the tournament
+            // outside span.evdesc, so fallback to the whole row text.
+            val evdescText = element.select("span.evdesc").firstOrNull()
+                ?.text()
+                ?.replace(Regex("\\s+"), " ")
+                ?.trim()
+                ?: ""
+            val rowText = element.text()
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            val rowInfo = rowText
+                .removePrefix(title)
+                .trim()
+                .removePrefix("-")
+                .trim()
+            val time = when {
+                rowInfo.contains(Regex("\\d{1,2}:\\d{2}")) && rowInfo.length > evdescText.length -> rowInfo
+                else -> evdescText
+            }
+
+                MediaItem(
+                    id = toAbsoluteUrl(link),
+                    title = title,
+                    imageUrl = "",
+                    aceStreamUrl = "",
+                    time = time,
+                    matchUrl = toAbsoluteUrl(link)
+                )
+            }
+            .distinctBy { it.matchUrl }
     }
     
     suspend fun loadTeamImages(mediaItems: List<MediaItem>): List<MediaItem> = withContext(Dispatchers.IO) {
@@ -288,101 +340,107 @@ class MatchParser {
     }
     
     private suspend fun parseMatchPageForTeamImages(matchUrl: String): Pair<String, String> = withContext(Dispatchers.IO) {
-        try {
-            val doc: Document = Jsoup.connect(matchUrl)
-                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                .timeout(10000)
-                .get()
-            
-            // Find all img tags with itemprop="image" in the match page
-            val images = doc.select("img[itemprop=\"image\"]")
-            
-            if (images.size >= 2) {
-                val homeTeamImage = if (images[0].attr("src").startsWith("//")) {
-                    "https:${images[0].attr("src")}"
-                } else {
-                    images[0].attr("src")
+        repeat(3) { attempt ->
+            try {
+                val doc: Document = fetchDocument(matchUrl, attempts = 1)
+
+                // Find all img tags with itemprop="image" in the match page
+                val images = doc.select("img[itemprop=\"image\"]")
+
+                if (images.size >= 2) {
+                    return@withContext Pair(
+                        toAbsoluteAssetUrl(images[0].attr("src")),
+                        toAbsoluteAssetUrl(images[1].attr("src"))
+                    )
                 }
-                
-                val awayTeamImage = if (images[1].attr("src").startsWith("//")) {
-                    "https:${images[1].attr("src")}"
-                } else {
-                    images[1].attr("src")
-                }
-                
-                Pair(homeTeamImage, awayTeamImage)
-            } else {
-                Pair("", "")
+            } catch (e: Exception) {
+                // Try again below. Missing images should not break match loading.
             }
-        } catch (e: Exception) {
-            Pair("", "")
+
+            if (attempt < 2) {
+                delay(retryDelayMs)
+            }
         }
+
+        Pair("", "")
     }
     
     suspend fun parseMatchPageForAcestreamLinks(matchUrl: String): List<AcestreamStream> = withContext(Dispatchers.IO) {
-        try {
-            val doc: Document = Jsoup.connect(matchUrl)
-                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                .timeout(10000)
-                .get()
-            
-            val streams = mutableListOf<AcestreamStream>()
-            
-            // Parse lnktbj class elements for acestream links
-            val lnktbjTables = doc.select("table.lnktbj")
-            
-            lnktbjTables.forEachIndexed { index, table ->
-                // Extract bitrate
-                val bitrateElement = table.select("td.bitrate").first()
-                val bitrate = bitrateElement?.text() ?: ""
-                
-                // Extract quality rating
-                val qualityElement = table.select("td.rate div").first()
-                val quality = qualityElement?.text()?.replace("%", "")?.trim() ?: ""
+        var streams = emptyList<AcestreamStream>()
 
-                val flagUrl = table.select("img[src*=linkflag]").first()
-                    ?.attr("src")
-                    ?.let { toAbsoluteAssetUrl(it) }
-                    ?: ""
-                
-                // Extract acestream link
-                val acestreamLinkElement = table.select("a[href^=acestream://]").first()
-                val link = acestreamLinkElement?.attr("href") ?: ""
-                
-                if (link.isNotEmpty()) {
-                    streams.add(
-                        AcestreamStream(
-                            id = index.toString(),
-                            bitrate = bitrate,
-                            quality = quality,
-                            link = link,
-                            flagUrl = flagUrl
-                        )
-                    )
+        repeat(3) { attempt ->
+            try {
+                val doc = fetchDocument(matchUrl, attempts = 1)
+                streams = parseAcestreamStreamsDocument(doc)
+
+                if (streams.isNotEmpty()) {
+                    return@withContext streams
                 }
+            } catch (e: Exception) {
+                // Try again below. Empty list is still a valid final result.
             }
-            
-            streams
-        } catch (e: Exception) {
-            emptyList()
+
+            if (attempt < 2) {
+                delay(retryDelayMs)
+            }
         }
+
+        streams
+    }
+
+    private fun parseAcestreamStreamsDocument(doc: Document): List<AcestreamStream> {
+        val streams = mutableListOf<AcestreamStream>()
+
+        // Parse lnktbj class elements for acestream links
+        val lnktbjTables = doc.select("table.lnktbj")
+
+        lnktbjTables.forEachIndexed { index, table ->
+            // Extract bitrate
+            val bitrate = table.select("td.bitrate").firstOrNull()?.text() ?: ""
+
+            // Extract quality rating
+            val quality = table.select("td.rate div").firstOrNull()
+                ?.text()
+                ?.replace("%", "")
+                ?.trim()
+                ?: ""
+
+            val flagUrl = table.select("img[src*=linkflag]").firstOrNull()
+                ?.attr("src")
+                ?.let { toAbsoluteAssetUrl(it) }
+                ?: ""
+
+            // Extract acestream link
+            val link = table.select("a[href^=acestream://]").firstOrNull()?.attr("href") ?: ""
+
+            if (link.isNotEmpty()) {
+                streams.add(
+                    AcestreamStream(
+                        id = link,
+                        bitrate = bitrate,
+                        quality = quality,
+                        link = link,
+                        flagUrl = flagUrl
+                    )
+                )
+            }
+        }
+
+        return streams.distinctBy { it.link }
     }
 
     suspend fun parseMatchPageForAcestreamLink(matchUrl: String): String = withContext(Dispatchers.IO) {
         try {
-            val doc: Document = Jsoup.connect(matchUrl)
-                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                .timeout(10000)
-                .get()
+            val doc: Document = fetchDocument(matchUrl)
             
             // Look for acestream links in the page
             val acestreamLinks = doc.select("a[href^=acestream://]")
-            if (acestreamLinks.isNotEmpty()) {
-                return@withContext acestreamLinks.first().attr("href")
+            acestreamLinks.firstOrNull()?.attr("href")?.let { link ->
+                return@withContext link
             }
             
             // Also check for acestream links in text content
-            val bodyText = doc.body().text()
+            val bodyText = doc.body()?.text().orEmpty()
             val acestreamMatches = Regex("acestream://[a-f0-9]{32,}").find(bodyText)
             if (acestreamMatches != null) {
                 return@withContext acestreamMatches.value

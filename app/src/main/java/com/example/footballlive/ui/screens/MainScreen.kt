@@ -83,7 +83,6 @@ import com.example.footballlive.data.AcestreamStream
 import com.example.footballlive.data.AppUpdateInfo
 import com.example.footballlive.data.MatchParser
 import com.example.footballlive.data.MediaItem
-import com.example.footballlive.data.MockData
 import com.example.footballlive.data.NewsArticle
 import com.example.footballlive.data.UpdateRepository
 import kotlinx.coroutines.launch
@@ -153,6 +152,7 @@ fun MainScreen(
     var updateError by remember { mutableStateOf<String?>(null) }
     var showMobileDetails by remember { mutableStateOf(false) }
     var selectedSection by remember { mutableStateOf(MainSection.Matches) }
+    var matchesLoadError by remember { mutableStateOf<String?>(null) }
     var newsArticles by remember { mutableStateOf(MockNewsArticles) }
     var selectedNewsArticle by remember { mutableStateOf(MockNewsArticles.first()) }
     var showMobileNewsDetails by remember { mutableStateOf(false) }
@@ -165,8 +165,17 @@ fun MainScreen(
         showMobileDetails = false
         showMobileNewsDetails = false
         val result = parser.parseMatches()
-        val loadedItems = result.getOrElse { MockData.mediaItems }
-        mediaItems = parser.loadTeamImages(loadedItems)
+        val loadedItems = result.getOrNull().orEmpty()
+        matchesLoadError = if (loadedItems.isEmpty()) {
+            result.exceptionOrNull()?.message ?: "Не удалось загрузить матчи"
+        } else {
+            null
+        }
+        mediaItems = if (loadedItems.isNotEmpty()) {
+            parser.loadTeamImages(loadedItems)
+        } else {
+            emptyList()
+        }
         selectedMediaItem = mediaItems.firstOrNull()
         isLoadingMatches = false
 
@@ -198,7 +207,7 @@ fun MainScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
         Image(
-            painter = painterResource(id = R.drawable.background_main),
+            painter = painterResource(id = R.drawable.background_2),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop
@@ -227,6 +236,7 @@ fun MainScreen(
                         selectedMediaItem = selectedMediaItem,
                         streams = acestreamStreams,
                         newsArticles = newsArticles,
+                        matchesLoadError = matchesLoadError,
                         selectedSection = selectedSection,
                         selectedNewsArticle = selectedNewsArticle,
                         isParsingStreams = isParsingStreams,
@@ -301,6 +311,13 @@ fun MainScreen(
                             selectedNewsArticle = article
                         },
                         modifier = Modifier.fillMaxSize()
+                    )
+                } else if (matchesLoadError != null) {
+                    MatchLoadErrorState(
+                        modifier = Modifier.fillMaxSize(),
+                        onRetry = {
+                            reloadRequest++
+                        }
                     )
                 } else {
                     Row(
@@ -552,6 +569,7 @@ private fun MobileMainContent(
     selectedMediaItem: MediaItem?,
     streams: List<AcestreamStream>,
     newsArticles: List<NewsArticle>,
+    matchesLoadError: String?,
     selectedSection: MainSection,
     selectedNewsArticle: NewsArticle,
     isParsingStreams: Boolean,
@@ -627,6 +645,7 @@ private fun MobileMainContent(
             else -> {
                 MobileMatchesList(
                     mediaItems = mediaItems,
+                    matchesLoadError = matchesLoadError,
                     selectedSection = selectedSection,
                     onSectionChange = onSectionChange,
                     onRefresh = onRefresh,
@@ -640,6 +659,7 @@ private fun MobileMainContent(
 @Composable
 private fun MobileMatchesList(
     mediaItems: List<MediaItem>,
+    matchesLoadError: String?,
     selectedSection: MainSection,
     onSectionChange: (MainSection) -> Unit,
     onRefresh: () -> Unit,
@@ -653,16 +673,64 @@ private fun MobileMatchesList(
 
     Spacer(modifier = Modifier.height(14.dp))
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+    if (matchesLoadError != null) {
+        MobileMatchLoadErrorState(
+            modifier = Modifier.fillMaxSize(),
+            onRetry = onRefresh
+        )
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(mediaItems, key = { it.id }) { mediaItem ->
+                MobileMatchCard(
+                    mediaItem = mediaItem,
+                    onClick = { onMatchClick(mediaItem) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileMatchLoadErrorState(
+    modifier: Modifier = Modifier,
+    onRetry: () -> Unit
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
     ) {
-        items(mediaItems, key = { it.id }) { mediaItem ->
-            MobileMatchCard(
-                mediaItem = mediaItem,
-                onClick = { onMatchClick(mediaItem) }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Не удалось загрузить матчи",
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.titleMedium,
+                color = MobileTextPrimary,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Проверь соединение или попробуй ещё раз.",
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MobileTextSecondary,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(18.dp))
+            MaterialButton(onClick = onRetry) {
+                Text(
+                    text = "Повторить",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }
@@ -680,7 +748,7 @@ private fun MobileHeader(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(
-                painter = painterResource(id = R.mipmap.ic_launcher),
+                painter = painterResource(id = R.drawable.goalstream_logo),
                 contentDescription = "GoalStream",
                 modifier = Modifier
                     .size(38.dp)
@@ -880,6 +948,19 @@ private fun MobileNewsCard(
                         .height(132.dp)
                         .clip(RoundedCornerShape(8.dp)),
                     contentScale = ContentScale.Crop
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            } else {
+                Image(
+                    painter = painterResource(id = R.drawable.ball),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(132.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .padding(24.dp),
+                    contentScale = ContentScale.Fit
                 )
                 Spacer(modifier = Modifier.height(12.dp))
             }
@@ -1407,12 +1488,13 @@ private fun NewsThumbnail(article: NewsArticle) {
                 contentScale = ContentScale.Crop
             )
         } else {
-            Text(
-                text = "NEWS",
-                style = MaterialTheme.typography.labelLarge,
-                color = Color(0xFF32D583),
-                fontWeight = FontWeight.Black,
-                textAlign = TextAlign.Center
+            Image(
+                painter = painterResource(id = R.drawable.ball),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                contentScale = ContentScale.Fit
             )
         }
     }
@@ -1432,11 +1514,11 @@ private fun NewsArticleContent(
     TvLazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (article.bannerUrl.isNotBlank()) {
             item {
-                NewsArticleFocusCard {
+                NewsArticleFocusCard(contentPadding = PaddingValues(4.dp)) {
                     AsyncImage(
                         model = article.bannerUrl,
                         contentDescription = null,
@@ -1451,7 +1533,9 @@ private fun NewsArticleContent(
         }
 
         item {
-            NewsArticleFocusCard {
+            NewsArticleFocusCard(
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+            ) {
                 Text(
                     text = article.title,
                     style = MaterialTheme.typography.titleLarge,
@@ -1463,7 +1547,9 @@ private fun NewsArticleContent(
         }
 
         item {
-            NewsArticleFocusCard {
+            NewsArticleFocusCard(
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+            ) {
                 Text(
                     text = article.publishedAt,
                     style = MaterialTheme.typography.titleMedium,
@@ -1477,6 +1563,7 @@ private fun NewsArticleContent(
             NewsArticleFocusCard {
                 Text(
                     text = block,
+                    modifier = Modifier.padding(top = 10.dp),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -1487,7 +1574,10 @@ private fun NewsArticleContent(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun NewsArticleFocusCard(content: @Composable () -> Unit) {
+private fun NewsArticleFocusCard(
+    contentPadding: PaddingValues = PaddingValues(10.dp),
+    content: @Composable () -> Unit
+) {
     Card(
         onClick = {},
         modifier = Modifier.fillMaxWidth(),
@@ -1502,7 +1592,7 @@ private fun NewsArticleFocusCard(content: @Composable () -> Unit) {
             border = Border.None
         )
     ) {
-        Box(modifier = Modifier.padding(10.dp)) {
+        Box(modifier = Modifier.padding(contentPadding)) {
             content()
         }
     }
@@ -1530,7 +1620,7 @@ private fun Header(
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    painter = painterResource(id = R.mipmap.ic_launcher),
+                    painter = painterResource(id = R.drawable.goalstream_logo),
                     contentDescription = "Goal Stream",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit
@@ -1620,6 +1710,46 @@ private fun MatchListPanel(
                     isSelected = mediaItem.id == selectedMediaItem?.id,
                     onClick = { onMatchClick(mediaItem) }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MatchLoadErrorState(
+    modifier: Modifier = Modifier,
+    onRetry: () -> Unit
+) {
+    Panel(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Не удалось загрузить матчи",
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Сайт мог временно не ответить или вернуть неполную страницу.",
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(onClick = onRetry) {
+                    Text("Повторить")
+                }
             }
         }
     }

@@ -186,15 +186,24 @@ class MatchParser {
             src.contains("img/images") || src.contains("img/nws")
         }
             ?.attr("src")
-            ?.let { toAbsoluteAssetUrl(it) }
+            ?.let { normalizeNewsBannerUrl(it) }
             .orEmpty()
 
         if (articleImage.isNotBlank()) return articleImage
 
         return doc.select("meta[property=og:image]").firstOrNull()
             ?.attr("content")
-            ?.let { toAbsoluteAssetUrl(it) }
+            ?.let { normalizeNewsBannerUrl(it) }
             .orEmpty()
+    }
+
+    private fun normalizeNewsBannerUrl(url: String): String {
+        val absoluteUrl = toAbsoluteAssetUrl(url)
+        return if (absoluteUrl.endsWith("/img/oglogo.png", ignoreCase = true)) {
+            ""
+        } else {
+            absoluteUrl
+        }
     }
 
     private fun extractNewsBody(textElement: Element?): String {
@@ -251,18 +260,48 @@ class MatchParser {
     }
 
     private fun parseMatchesDocument(doc: Document): List<MediaItem> {
-        return doc.select("a.live[href], a[href*=transmatch], a[href*=/eventinfo/]")
-            .mapNotNull { titleElement ->
-            val title = titleElement.text()
-                .replace(Regex("\\s+"), " ")
-                .trim()
-            val link = titleElement.attr("href").trim()
-                if (title.isBlank() || link.isBlank()) return@mapNotNull null
+        val specificTable = doc.select(
+            "body > table > tbody > tr > td:nth-child(2) > table > tbody > tr:nth-child(4) > td > table > tbody > tr > td:nth-child(2) > table > tbody > tr > td > table > tbody > tr:nth-child(2) > td > table > tbody > tr > td > table > tbody > tr > td > table:nth-child(5) > tbody > tr > td:nth-child(2) > table:nth-child(2)"
+        ).firstOrNull()
 
+        val fastRows = specificTable
+            ?.select("tbody tr td[colspan=\"2\"]:has(a.live[href])")
+            .orEmpty()
+
+        val fastItems = parseMatchRows(fastRows)
+        if (fastItems.isNotEmpty()) return fastItems
+
+        return parseMatchLinks(doc.select("a.live[href], a[href*=transmatch], a[href*=/eventinfo/]"))
+    }
+
+    private fun parseMatchRows(rows: List<Element>): List<MediaItem> {
+        return rows
+            .mapNotNull { element ->
+                val titleElement = element.select("a.live[href]").firstOrNull() ?: return@mapNotNull null
+                parseMatchElement(titleElement, element)
+            }
+            .distinctBy { it.matchUrl }
+    }
+
+    private fun parseMatchLinks(links: List<Element>): List<MediaItem> {
+        return links
+            .mapNotNull { titleElement ->
                 val element = titleElement.parents().firstOrNull { parent ->
                     parent.`is`("td[colspan=2]") || parent.select("span.evdesc").isNotEmpty()
                 } ?: titleElement.parent()
                 if (element == null) return@mapNotNull null
+
+                parseMatchElement(titleElement, element)
+            }
+            .distinctBy { it.matchUrl }
+    }
+
+    private fun parseMatchElement(titleElement: Element, element: Element): MediaItem? {
+            val title = titleElement.text()
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            val link = titleElement.attr("href").trim()
+        if (title.isBlank() || link.isBlank()) return null
 
             // Parse full match schedule info. Some pages keep the tournament
             // outside span.evdesc, so fallback to the whole row text.
@@ -284,16 +323,14 @@ class MatchParser {
                 else -> evdescText
             }
 
-                MediaItem(
-                    id = toAbsoluteUrl(link),
-                    title = title,
-                    imageUrl = "",
-                    aceStreamUrl = "",
-                    time = time,
-                    matchUrl = toAbsoluteUrl(link)
-                )
-            }
-            .distinctBy { it.matchUrl }
+        return MediaItem(
+            id = toAbsoluteUrl(link),
+            title = title,
+            imageUrl = "",
+            aceStreamUrl = "",
+            time = time,
+            matchUrl = toAbsoluteUrl(link)
+        )
     }
     
     suspend fun loadTeamImages(mediaItems: List<MediaItem>): List<MediaItem> = withContext(Dispatchers.IO) {

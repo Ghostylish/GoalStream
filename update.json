@@ -1,7 +1,7 @@
 {
   "versionCode": 4,
-  "versionName": "2.0.4",
-  "apkUrl": "https://github.com/Ghostylish/GoalStream/releases/download/v2.0.4/GoalStream.apk",
-  "changelog": "Улучшен UI",
+  "versionName": "2.0.5",
+  "apkUrl": "https://github.com/Ghostylish/GoalStream/releases/download/v2.0.5/GoalStream.apk",
+  "changelog": "Улучшен UI, Добавлены новости футола",
   "required": false
 }

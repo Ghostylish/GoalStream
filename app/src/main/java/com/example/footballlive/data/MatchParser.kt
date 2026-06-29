@@ -6,13 +6,182 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 
 class MatchParser {
+    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+    private data class NewsPreview(
+        val title: String,
+        val publishedAt: String,
+        val url: String
+    )
+
+    suspend fun parseFootballNews(): Result<List<NewsArticle>> = withContext(Dispatchers.IO) {
+        try {
+            val doc: Document = Jsoup.connect("https://livetv901.me/ua/lenta/full/")
+                .userAgent(userAgent)
+                .timeout(10000)
+                .get()
+
+            val articles = doc.select("a[href]")
+                .mapNotNull { anchor -> parseNewsListItem(anchor) }
+                .distinctBy { it.url }
+                .take(12)
+                .map { preview ->
+                    async {
+                        parseNewsArticlePage(preview.url, preview.title, preview.publishedAt)
+                    }
+                }
+                .awaitAll()
+
+            Result.success(articles)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun parseNewsListItem(anchor: Element): NewsPreview? {
+        val title = anchor.text()
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val href = anchor.attr("href").trim()
+        if (title.isBlank() || href.isBlank()) return null
+        if (!Regex("/lenta/\\d+_").containsMatchIn(href)) return null
+
+        val container = anchor.parents().firstOrNull { parent ->
+            parent.select(".date, .tnws").isNotEmpty()
+        } ?: return null
+
+        val dateText = container.select(".date, .tnws").firstOrNull()
+            ?.text()
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?: return null
+
+        if (!dateText.contains("Футбол", ignoreCase = true)) return null
+
+        val publishedAt = extractNewsPublishedAt(dateText)
+
+        return NewsPreview(
+            title = title,
+            publishedAt = publishedAt,
+            url = toAbsoluteUrl(href)
+        )
+    }
+
+    private fun extractNewsPublishedAt(dateText: String): String {
+        val normalized = dateText
+            .replace("&ndash;", "–")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+        if (normalized.contains("|")) {
+            return normalized.substringBefore("|").trim()
+        }
+
+        val afterDash = normalized.substringAfter("–", normalized).trim()
+        val withoutCategory = afterDash
+            .replace(Regex("^Футбол\\s*,\\s*"), "")
+            .trim()
+            .trim(',')
+            .trim()
+
+        return withoutCategory.ifBlank { normalized }
+    }
+
+    private fun parseNewsArticlePage(
+        url: String,
+        fallbackTitle: String,
+        publishedAt: String
+    ): NewsArticle {
+        return try {
+            val doc: Document = Jsoup.connect(url)
+                .userAgent(userAgent)
+                .timeout(10000)
+                .get()
+
+            val textElement = findNewsTextElement(doc)
+            val bannerUrl = findNewsBannerUrl(doc, textElement)
+            val body = extractNewsBody(textElement)
+
+            NewsArticle(
+                id = url,
+                title = fallbackTitle,
+                bannerUrl = bannerUrl,
+                body = body.ifBlank { fallbackTitle },
+                publishedAt = publishedAt,
+                url = url
+            )
+        } catch (e: Exception) {
+            NewsArticle(
+                id = url,
+                title = fallbackTitle,
+                bannerUrl = "",
+                body = fallbackTitle,
+                publishedAt = publishedAt,
+                url = url
+            )
+        }
+    }
+
+    private fun findNewsTextElement(doc: Document): Element? {
+        val titleContainer = doc.select("h1.nwstitle").firstOrNull()?.parent()
+        val articleText = titleContainer?.select("> div.text")?.firstOrNull()
+        if (articleText != null) return articleText
+
+        return doc.select("div.text")
+            .filter { element ->
+                element.select("p").isNotEmpty() || element.select("img[src]").any { image ->
+                    image.attr("src").contains("img/images")
+                }
+            }
+            .maxByOrNull { element -> element.text().length }
+    }
+
+    private fun findNewsBannerUrl(doc: Document, textElement: Element?): String {
+        val articleImage = textElement?.select("img[src]")?.firstOrNull { image ->
+            val src = image.attr("src")
+            src.contains("img/images") || src.contains("img/nws")
+        }
+            ?.attr("src")
+            ?.let { toAbsoluteAssetUrl(it) }
+            .orEmpty()
+
+        if (articleImage.isNotBlank()) return articleImage
+
+        return doc.select("meta[property=og:image]").firstOrNull()
+            ?.attr("content")
+            ?.let { toAbsoluteAssetUrl(it) }
+            .orEmpty()
+    }
+
+    private fun extractNewsBody(textElement: Element?): String {
+        if (textElement == null) return ""
+
+        val paragraphs = textElement.select("p")
+            .map { paragraph ->
+                paragraph.text()
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+            }
+            .filter { it.isNotBlank() }
+
+        if (paragraphs.isNotEmpty()) {
+            return paragraphs.joinToString("\n\n")
+        }
+
+        val cleanElement = textElement.clone()
+        cleanElement.select("script, style, iframe, img").remove()
+        return cleanElement.text()
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
     
     suspend fun parseMatches(): Result<List<MediaItem>> = withContext(Dispatchers.IO) {
         try {
             val doc: Document = Jsoup.connect("https://livetv901.me/ua/allupcomingsports/1/")
-                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .userAgent(userAgent)
                 .timeout(10000)
                 .get()
             
@@ -55,11 +224,7 @@ class MatchParser {
                 }
                 
                 // Convert relative match link to absolute
-                val matchUrl = if (link.startsWith("/")) {
-                    "https://livetv901.me$link"
-                } else {
-                    link
-                }
+                val matchUrl = toAbsoluteUrl(link)
                 
                 mediaItems.add(
                     MediaItem(
@@ -246,6 +411,14 @@ class MatchParser {
         // In a real app, this would come from the parsed data or API
         val chars = "0123456789abcdef"
         return (1..32).map { chars.random() }.joinToString("")
+    }
+
+    private fun toAbsoluteUrl(url: String): String {
+        return when {
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> "https://livetv901.me$url"
+            else -> url
+        }
     }
 
     private fun toAbsoluteAssetUrl(url: String): String {

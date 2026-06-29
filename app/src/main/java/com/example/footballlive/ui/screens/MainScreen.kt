@@ -52,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -83,11 +84,41 @@ import com.example.footballlive.data.AppUpdateInfo
 import com.example.footballlive.data.MatchParser
 import com.example.footballlive.data.MediaItem
 import com.example.footballlive.data.MockData
+import com.example.footballlive.data.NewsArticle
 import com.example.footballlive.data.UpdateRepository
 import kotlinx.coroutines.launch
 
 private val MobileTextPrimary = Color(0xFFF7FBF8)
 private val MobileTextSecondary = Color(0xBFDCE7E1)
+
+private enum class MainSection {
+    Matches,
+    News
+}
+
+private val MockNewsArticles = listOf(
+    NewsArticle(
+        id = "news-1",
+        title = "GoalStream: главные матчи вечера и где ждать трансляции",
+        bannerUrl = "https://cdn.livetv901.me/img/images/68/136068_e27070d3.jpg",
+        publishedAt = "Сегодня, 18:40",
+        body = "Вечерняя сетка матчей обещает быть плотной: несколько игр стартуют почти одновременно, а трансляции чаще всего появляются ближе к началу события. Мы рекомендуем открыть нужный матч заранее и повторить поиск потоков за несколько минут до стартового свистка.\n\nКоманды подходят к игровому дню в разном состоянии, поэтому особое внимание стоит обратить на матчи, где турнирная мотивация выше обычной. В таких играх качество и количество источников обычно заметно лучше."
+    ),
+    NewsArticle(
+        id = "news-2",
+        title = "Почему Ace Stream ссылки появляются не сразу",
+        bannerUrl = "",
+        publishedAt = "Сегодня, 15:10",
+        body = "Многие трансляции публикуются незадолго до начала матча. Это нормальное поведение источников: страница события может быть доступна заранее, но список потоков обновляется позже.\n\nЕсли в карточке матча пока нет ссылок, стоит повторить поиск ближе к началу. GoalStream сохраняет выбранный матч на экране, поэтому можно быстро вернуться к проверке без повторного поиска события в списке."
+    ),
+    NewsArticle(
+        id = "news-3",
+        title = "Обновление интерфейса: мобильная версия стала компактнее",
+        bannerUrl = "https://images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=1200&q=80",
+        publishedAt = "Вчера, 21:05",
+        body = "Мобильная версия теперь использует отдельный сценарий: сначала список матчей, затем экран деталей с логотипами команд и трансляциями. Такой подход лучше подходит для смартфонов и не пытается уместить телевизионную двухпанельную компоновку на маленький экран.\n\nНа Android TV прежний двухпанельный интерфейс остается основным, потому что он хорошо работает с пультом и фокусом."
+    )
+)
 
 @Composable
 private fun isMobileUi(): Boolean {
@@ -121,6 +152,10 @@ fun MainScreen(
     var isDownloadingUpdate by remember { mutableStateOf(false) }
     var updateError by remember { mutableStateOf<String?>(null) }
     var showMobileDetails by remember { mutableStateOf(false) }
+    var selectedSection by remember { mutableStateOf(MainSection.Matches) }
+    var newsArticles by remember { mutableStateOf(MockNewsArticles) }
+    var selectedNewsArticle by remember { mutableStateOf(MockNewsArticles.first()) }
+    var showMobileNewsDetails by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadRequest) {
         isLoadingMatches = true
@@ -128,11 +163,17 @@ fun MainScreen(
         acestreamStreams = emptyList()
         hasSearchedStreams = false
         showMobileDetails = false
+        showMobileNewsDetails = false
         val result = parser.parseMatches()
         val loadedItems = result.getOrElse { MockData.mediaItems }
         mediaItems = parser.loadTeamImages(loadedItems)
         selectedMediaItem = mediaItems.firstOrNull()
         isLoadingMatches = false
+
+        val newsResult = parser.parseFootballNews()
+        val loadedNews = newsResult.getOrElse { MockNewsArticles }
+        newsArticles = loadedNews.ifEmpty { MockNewsArticles }
+        selectedNewsArticle = newsArticles.firstOrNull() ?: MockNewsArticles.first()
     }
 
     LaunchedEffect(Unit) {
@@ -185,14 +226,26 @@ fun MainScreen(
                         mediaItems = mediaItems,
                         selectedMediaItem = selectedMediaItem,
                         streams = acestreamStreams,
+                        newsArticles = newsArticles,
+                        selectedSection = selectedSection,
+                        selectedNewsArticle = selectedNewsArticle,
                         isParsingStreams = isParsingStreams,
                         hasSearchedStreams = hasSearchedStreams,
                         showDetails = showMobileDetails,
+                        showNewsDetails = showMobileNewsDetails,
+                        onSectionChange = { section ->
+                            selectedSection = section
+                            showMobileDetails = false
+                            showMobileNewsDetails = false
+                        },
                         onRefresh = {
                             reloadRequest++
                         },
                         onBackToMatches = {
                             showMobileDetails = false
+                        },
+                        onBackToNews = {
+                            showMobileNewsDetails = false
                         },
                         onMatchClick = { mediaItem ->
                             selectedMediaItem = mediaItem
@@ -201,6 +254,10 @@ fun MainScreen(
                             isParsingStreams = true
                             showMobileDetails = true
                             onMediaItemClick(mediaItem)
+                        },
+                        onNewsClick = { article ->
+                            selectedNewsArticle = article
+                            showMobileNewsDetails = true
                         },
                         onSearchStreams = {
                             acestreamStreams = emptyList()
@@ -225,6 +282,10 @@ fun MainScreen(
             ) {
                 Header(
                     matchCount = mediaItems.size,
+                    selectedSection = selectedSection,
+                    onSectionChange = { section ->
+                        selectedSection = section
+                    },
                     onRefresh = {
                         reloadRequest++
                     }
@@ -232,10 +293,20 @@ fun MainScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp)
-                ) {
+                if (selectedSection == MainSection.News) {
+                    NewsPanel(
+                        articles = newsArticles,
+                        selectedArticle = selectedNewsArticle,
+                        onArticleClick = { article ->
+                            selectedNewsArticle = article
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    ) {
                     // Левая панель со списком матчей. Width влияет на ширину списка и карточек матчей.
                     MatchListPanel(
                         mediaItems = mediaItems,
@@ -275,6 +346,7 @@ fun MainScreen(
                             }
                         }
                     )
+                    }
                 }
             }
                 }
@@ -479,12 +551,19 @@ private fun MobileMainContent(
     mediaItems: List<MediaItem>,
     selectedMediaItem: MediaItem?,
     streams: List<AcestreamStream>,
+    newsArticles: List<NewsArticle>,
+    selectedSection: MainSection,
+    selectedNewsArticle: NewsArticle,
     isParsingStreams: Boolean,
     hasSearchedStreams: Boolean,
     showDetails: Boolean,
+    showNewsDetails: Boolean,
+    onSectionChange: (MainSection) -> Unit,
     onRefresh: () -> Unit,
     onBackToMatches: () -> Unit,
+    onBackToNews: () -> Unit,
     onMatchClick: (MediaItem) -> Unit,
+    onNewsClick: (NewsArticle) -> Unit,
     onSearchStreams: () -> Unit,
     onStreamClick: (AcestreamStream) -> Unit
 ) {
@@ -492,6 +571,11 @@ private fun MobileMainContent(
     var lastBackPressTime by remember { mutableStateOf(0L) }
 
     BackHandler {
+        if (selectedSection == MainSection.News && showNewsDetails) {
+            onBackToNews()
+            return@BackHandler
+        }
+
         if (showDetails && selectedMediaItem != null) {
             onBackToMatches()
             return@BackHandler
@@ -513,22 +597,42 @@ private fun MobileMainContent(
             .navigationBarsPadding()
             .padding(start = 16.dp, top = 18.dp, end = 16.dp, bottom = 18.dp)
     ) {
-        if (showDetails && selectedMediaItem != null) {
-            MobileMatchDetails(
-                mediaItem = selectedMediaItem,
-                streams = streams,
-                isParsingStreams = isParsingStreams,
-                hasSearchedStreams = hasSearchedStreams,
-                onBack = onBackToMatches,
-                onSearchStreams = onSearchStreams,
-                onStreamClick = onStreamClick
-            )
-        } else {
-            MobileMatchesList(
-                mediaItems = mediaItems,
-                onRefresh = onRefresh,
-                onMatchClick = onMatchClick
-            )
+        when {
+            selectedSection == MainSection.News && showNewsDetails -> {
+                MobileNewsDetails(
+                    article = selectedNewsArticle,
+                    onBack = onBackToNews
+                )
+            }
+            selectedSection == MainSection.News -> {
+                MobileNewsList(
+                    articles = newsArticles,
+                    selectedSection = selectedSection,
+                    onSectionChange = onSectionChange,
+                    onRefresh = onRefresh,
+                    onArticleClick = onNewsClick
+                )
+            }
+            showDetails && selectedMediaItem != null -> {
+                MobileMatchDetails(
+                    mediaItem = selectedMediaItem,
+                    streams = streams,
+                    isParsingStreams = isParsingStreams,
+                    hasSearchedStreams = hasSearchedStreams,
+                    onBack = onBackToMatches,
+                    onSearchStreams = onSearchStreams,
+                    onStreamClick = onStreamClick
+                )
+            }
+            else -> {
+                MobileMatchesList(
+                    mediaItems = mediaItems,
+                    selectedSection = selectedSection,
+                    onSectionChange = onSectionChange,
+                    onRefresh = onRefresh,
+                    onMatchClick = onMatchClick
+                )
+            }
         }
     }
 }
@@ -536,10 +640,16 @@ private fun MobileMainContent(
 @Composable
 private fun MobileMatchesList(
     mediaItems: List<MediaItem>,
+    selectedSection: MainSection,
+    onSectionChange: (MainSection) -> Unit,
     onRefresh: () -> Unit,
     onMatchClick: (MediaItem) -> Unit
 ) {
-    MobileHeader(onRefresh = onRefresh)
+    MobileHeader(
+        selectedSection = selectedSection,
+        onSectionChange = onSectionChange,
+        onRefresh = onRefresh
+    )
 
     Spacer(modifier = Modifier.height(14.dp))
 
@@ -558,7 +668,11 @@ private fun MobileMatchesList(
 }
 
 @Composable
-private fun MobileHeader(onRefresh: () -> Unit) {
+private fun MobileHeader(
+    selectedSection: MainSection,
+    onSectionChange: (MainSection) -> Unit,
+    onRefresh: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -589,6 +703,57 @@ private fun MobileHeader(onRefresh: () -> Unit) {
             Text(
                 text = "Обновить",
                 color = MobileTextPrimary,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        MobileSectionButton(
+            text = "Матчи",
+            selected = selectedSection == MainSection.Matches,
+            modifier = Modifier.weight(1f),
+            onClick = { onSectionChange(MainSection.Matches) }
+        )
+        MobileSectionButton(
+            text = "Новости",
+            selected = selectedSection == MainSection.News,
+            modifier = Modifier.weight(1f),
+            onClick = { onSectionChange(MainSection.News) }
+        )
+    }
+}
+
+@Composable
+private fun MobileSectionButton(
+    text: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) Color(0xFF32D583) else Color.White.copy(alpha = 0.08f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = if (selected) 0f else 0.12f))
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = text,
+                color = if (selected) Color(0xFF03120C) else MobileTextPrimary,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
         }
@@ -655,6 +820,178 @@ private fun MobileMatchCard(
                     color = MobileTextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileNewsList(
+    articles: List<NewsArticle>,
+    selectedSection: MainSection,
+    onSectionChange: (MainSection) -> Unit,
+    onRefresh: () -> Unit,
+    onArticleClick: (NewsArticle) -> Unit
+) {
+    MobileHeader(
+        selectedSection = selectedSection,
+        onSectionChange = onSectionChange,
+        onRefresh = onRefresh
+    )
+
+    Spacer(modifier = Modifier.height(14.dp))
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(articles, key = { it.id }) { article ->
+            MobileNewsCard(
+                article = article,
+                onClick = { onArticleClick(article) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileNewsCard(
+    article: NewsArticle,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White.copy(alpha = 0.07f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            if (article.bannerUrl.isNotBlank()) {
+                AsyncImage(
+                    model = article.bannerUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(132.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            Text(
+                text = article.publishedAt,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF7CD4FD),
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = article.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MobileTextPrimary,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = article.body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MobileTextSecondary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun MobileNewsDetails(
+    article: NewsArticle,
+    onBack: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MaterialOutlinedButton(onClick = onBack) {
+                    Text(
+                        text = "Назад",
+                        color = MobileTextPrimary
+                    )
+                }
+
+                Text(
+                    text = "Новости",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MobileTextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        if (article.bannerUrl.isNotBlank()) {
+            item {
+                AsyncImage(
+                    model = article.bannerUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(190.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            }
+        }
+
+        item {
+            Text(
+                text = article.title,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.headlineSmall,
+                color = MobileTextPrimary,
+                fontWeight = FontWeight.Black,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        item {
+            Text(
+                text = article.publishedAt,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF32D583),
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = Color.White.copy(alpha = 0.07f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+            ) {
+                Text(
+                    text = article.body,
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MobileTextPrimary
                 )
             }
         }
@@ -930,8 +1267,253 @@ private fun MobileStreamsLoading() {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
+private fun NewsPanel(
+    articles: List<NewsArticle>,
+    selectedArticle: NewsArticle,
+    modifier: Modifier = Modifier,
+    onArticleClick: (NewsArticle) -> Unit
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        Panel(
+            modifier = Modifier
+                .width(430.dp)
+                .fillMaxHeight()
+        ) {
+            TvLazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 16.dp,
+                    end = 16.dp,
+                    bottom = 18.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(articles, key = { it.id }) { article ->
+                    NewsRow(
+                        article = article,
+                        isSelected = article.id == selectedArticle.id,
+                        onFocus = { onArticleClick(article) },
+                        onClick = { onArticleClick(article) }
+                    )
+                }
+            }
+        }
+
+        Panel(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+        ) {
+            NewsArticleContent(
+                article = selectedArticle,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun NewsRow(
+    article: NewsArticle,
+    isSelected: Boolean,
+    onFocus: () -> Unit,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focusState ->
+                if (focusState.isFocused) {
+                    onFocus()
+                }
+            }
+            .zIndex(if (isFocused) 1f else 0f),
+        interactionSource = interactionSource,
+        shape = CardDefaults.shape(RoundedCornerShape(8.dp)),
+        colors = CardDefaults.colors(
+            containerColor = if (isSelected) Color(0x332ED47A) else Color.White.copy(alpha = 0.06f),
+            focusedContainerColor = Color(0x4432D583)
+        ),
+        scale = CardDefaults.scale(focusedScale = 1.02f),
+        border = CardDefaults.border(
+            focusedBorder = Border(BorderStroke(2.dp, Color(0xFF32D583))),
+            border = if (isSelected) Border(BorderStroke(1.dp, Color(0xFF32D583))) else Border.None
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            NewsThumbnail(article = article)
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = article.publishedAt,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF7CD4FD),
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = article.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = article.body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NewsThumbnail(article: NewsArticle) {
+    Box(
+        modifier = Modifier
+            .size(82.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White.copy(alpha = 0.08f)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (article.bannerUrl.isNotBlank()) {
+            AsyncImage(
+                model = article.bannerUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Text(
+                text = "NEWS",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color(0xFF32D583),
+                fontWeight = FontWeight.Black,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun NewsArticleContent(
+    article: NewsArticle,
+    modifier: Modifier = Modifier
+) {
+    val bodyBlocks = article.body
+        .split("\n\n")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+
+    TvLazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        if (article.bannerUrl.isNotBlank()) {
+            item {
+                NewsArticleFocusCard {
+                    AsyncImage(
+                        model = article.bannerUrl,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+            }
+        }
+
+        item {
+            NewsArticleFocusCard {
+                Text(
+                    text = article.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        item {
+            NewsArticleFocusCard {
+                Text(
+                    text = article.publishedAt,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFF32D583),
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        items(bodyBlocks) { block ->
+            NewsArticleFocusCard {
+                Text(
+                    text = block,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun NewsArticleFocusCard(content: @Composable () -> Unit) {
+    Card(
+        onClick = {},
+        modifier = Modifier.fillMaxWidth(),
+        shape = CardDefaults.shape(RoundedCornerShape(8.dp)),
+        colors = CardDefaults.colors(
+            containerColor = Color.Transparent,
+            focusedContainerColor = Color.White.copy(alpha = 0.08f)
+        ),
+        scale = CardDefaults.scale(focusedScale = 1.01f),
+        border = CardDefaults.border(
+            focusedBorder = Border(BorderStroke(1.dp, Color(0xFF32D583))),
+            border = Border.None
+        )
+    ) {
+        Box(modifier = Modifier.padding(10.dp)) {
+            content()
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
 private fun Header(
     matchCount: Int,
+    selectedSection: MainSection,
+    onSectionChange: (MainSection) -> Unit,
     onRefresh: () -> Unit
 ) {
     Row(
@@ -965,7 +1547,11 @@ private fun Header(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Все матчи • $matchCount событий",
+                    text = if (selectedSection == MainSection.News) {
+                        "Последние новости футбола"
+                    } else {
+                        "Все матчи • $matchCount событий"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -973,9 +1559,16 @@ private fun Header(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FilterChip(text = "Все", selected = true)
-            FilterChip(text = "Live", selected = false)
-            FilterChip(text = "Скоро", selected = false)
+            HeaderSectionButton(
+                text = "Матчи",
+                selected = selectedSection == MainSection.Matches,
+                onClick = { onSectionChange(MainSection.Matches) }
+            )
+            HeaderSectionButton(
+                text = "Новости",
+                selected = selectedSection == MainSection.News,
+                onClick = { onSectionChange(MainSection.News) }
+            )
             OutlinedButton(onClick = onRefresh) {
                 Text("Обновить")
             }
@@ -985,22 +1578,19 @@ private fun Header(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun FilterChip(
+private fun HeaderSectionButton(
     text: String,
-    selected: Boolean
+    selected: Boolean,
+    onClick: () -> Unit
 ) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (selected) Color(0xFF32D583) else Color.White.copy(alpha = 0.08f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = if (selected) 0f else 0.12f))
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            color = if (selected) Color(0xFF03120C) else MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold
-        )
+    if (selected) {
+        Button(onClick = onClick) {
+            Text(text)
+        }
+    } else {
+        OutlinedButton(onClick = onClick) {
+            Text(text)
+        }
     }
 }
 
